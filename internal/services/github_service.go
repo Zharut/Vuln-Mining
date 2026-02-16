@@ -10,25 +10,33 @@ import (
 
 type GitHubSearchResponse struct {
 	Items []struct {
-		ID            int     `json:"id"`
-		Name          string  `json:"name"`
-		FullName      string  `json:"full_name"`
-		Owner         struct {
+		ID              int    `json:"id"`
+		Name            string `json:"name"`
+		FullName        string `json:"full_name"`
+		Owner           struct {
 			Login string `json:"login"`
 		} `json:"owner"`
-		HTMLURL       string  `json:"html_url"`
+		HTMLURL         string  `json:"html_url"`
 		StargazersCount float64 `json:"stargazers_count"`
-		Language      string  `json:"language"`
+		Language        string  `json:"language"`
 	} `json:"items"`
 }
 
-func SearchRepositories(lang string, minStars int, limit int) ([]models.Project, error) {
-	// 1. สร้าง URL
-	query := fmt.Sprintf("stars:>=%d", minStars)
+func SearchRepositories(lang string, minStars int, maxStars int, limit int) ([]models.Project, error) {
+	// 1. สร้าง URL พร้อม Query String แบบช่วงดาว
+	starQuery := fmt.Sprintf(">=%d", minStars)
+	if maxStars > 0 {
+		starQuery = fmt.Sprintf("%d..%d", minStars, maxStars)
+	}
+
+	query := fmt.Sprintf("stars:%s", starQuery)
 	if lang != "" {
 		query += fmt.Sprintf(" language:%s", lang)
 	}
+
+	// สร้าง URL เต็ม
 	url := fmt.Sprintf("https://api.github.com/search/repositories?q=%s&sort=stars&order=desc&per_page=%d", query, limit)
+	fmt.Printf("📡 GitHub Query: %s\n", query) // Debug ให้เห็นว่ายิงอะไรไป
 
 	// 2. สร้าง Request
 	req, err := http.NewRequest("GET", url, nil)
@@ -37,9 +45,8 @@ func SearchRepositories(lang string, minStars int, limit int) ([]models.Project,
 	}
 
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
-	req.Header.Set("User-Agent", "Vuln-Scanner-App") // GitHub บังคับต้องมีอันนี้
+	req.Header.Set("User-Agent", "Vuln-Scanner-App")
 	
-	// ใส่ Token
 	token := os.Getenv("GITHUB_TOKEN")
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -60,7 +67,7 @@ func SearchRepositories(lang string, minStars int, limit int) ([]models.Project,
 		return nil, fmt.Errorf("GitHub API Error: %s (Check rate limit or token)", resp.Status)
 	}
 
-	// 4.Decode JSON
+	// 4. Decode JSON
 	var result GitHubSearchResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, err

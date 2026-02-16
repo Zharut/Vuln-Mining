@@ -255,6 +255,31 @@ func StartServer() {
 		io.Copy(c.Writer, resp.Body)
 	})
 
+	// --- 🟣 API GROUP 5: LOCAL KNOWLEDGE BASE (ดึงข้อมูลจาก SQL ที่เราใส่เอง) ---
+	r.GET("/api/knowledge/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		
+		type VulnDetail struct {
+			VulnerabilityID string  `json:"vulnerability_id"`
+			Title           string  `json:"title"`
+			Description     string  `json:"description"`
+			Remediation     string  `json:"remediation"`
+			CvssScore       float64 `json:"cvss_score"`
+			ReferencesJSON  string  `json:"references_json"`
+		}
+		var detail VulnDetail
+
+		// ค้นหาในตาราง vulnerability_details
+		if err := database.DB.Table("vulnerability_details").Where("vulnerability_id = ?", id).First(&detail).Error; err != nil {
+			c.JSON(404, gin.H{"error": "Not found in local DB"})
+			return
+		}
+
+		// แปลง Reference JSON string กลับเป็น Array (ถ้าจำเป็น) หรือส่งไปทั้งดุ้นก็ได้
+		// เพื่อความง่าย ส่ง struct ไปเลย Frontend ไปแกะเอง
+		c.JSON(200, detail)
+	})
+
 	log.Println("🚀 Server running on http://localhost:8081")
 	if err := r.Run(":8081"); err != nil {
 		log.Fatal("❌ Server failed to start:", err)

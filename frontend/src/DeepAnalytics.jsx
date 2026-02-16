@@ -52,56 +52,88 @@ function DeepAnalytics() {
     // ความสูงกราฟ
     const chartHeight = Math.max(500, sortedData.length * 40);
 
-    //Click Handler-
+    // --- 4. Smart Data Fetcher (ฉบับสมบูรณ์: รองรับ SQL Manual) ---
     const handleVulnClick = async (vulnId) => {
         setSelectedVuln(vulnId)
         setModalOpen(true)
         setVulnDetails(null)
         setLoadingDetails(true)
 
+        // ฟังก์ชันย่อย: วิ่งไปดูใน Database เครื่องเราเอง
+        const checkLocalDB = async (id) => {
+            try {
+                const res = await axios.get(`http://localhost:8081/api/knowledge/${id}`)
+                if (res.data && res.data.title) {
+                    // แปลง References จาก String JSON เป็น Array
+                    let refs = []
+                    try { refs = JSON.parse(res.data.references_json) } catch (e) { }
+
+                    return {
+                        id: res.data.vulnerability_id,
+                        summary: res.data.description,
+                        published: "Internal Database",
+                        cvss: res.data.cvss_score || "N/A",
+                        references: [res.data.remediation, ...refs].filter(Boolean) // เอาวิธีแก้มาใส่รวมใน ref
+                    }
+                }
+            } catch (e) {
+                return null // หาไม่เจอ
+            }
+        }
+
         try {
             let details = {}
 
-            // CASE A: CVE IDs
-            if (vulnId.startsWith('CVE-')) {
-                // Step 1: ลองดึงจาก cve.circl.lu
+            // CASE A: พวก Checkov, Gitleaks, Secret (วิ่งไปหาใน DB เราก่อนเลย)
+            if (vulnId.startsWith('CKV') || vulnId.startsWith('generic') || vulnId.startsWith('github') || vulnId.includes('SECRET')) {
+                const localData = await checkLocalDB(vulnId)
+                if (localData) {
+                    details = localData
+                } else {
+                    throw new Error("Internal finding details missing in DB")
+                }
+            }
+            // CASE B: CVE IDs
+            else if (vulnId.startsWith('CVE-')) {
                 try {
+                    // 1. ลองหาเว็บนอกก่อน
                     const res = await axios.get(`http://localhost:8081/api/proxy/cve/${vulnId}`)
-                    if (res.data && res.data.id) {
+                    if (res.data && res.data.id && res.data.summary) {
                         details = {
                             id: res.data.id,
-                            summary: res.data.summary || "No detailed description provided by source.",
+                            summary: res.data.summary,
                             published: res.data.Published,
                             cvss: res.data.cvss || 'N/A',
                             references: res.data.references || []
                         }
+                    } else { throw new Error("External Empty") }
+                } catch (extErr) {
+                    // 2. ถ้าเว็บนอกล่ม -> มาหาใน DB เรา (เผื่อเราเคยใส่ SQL ไว้)
+                    const localData = await checkLocalDB(vulnId)
+                    if (localData) {
+                        details = localData
                     } else {
-                        throw new Error("Empty data from primary source")
-                    }
-                } catch (primaryErr) {
-                    // Step 2: Fallback ไปหาใน OSV ผ่าน Proxy GHSA
-                    console.warn("Primary source failed, trying fallback...", primaryErr)
-                    const resBackup = await axios.get(`http://localhost:8081/api/proxy/ghsa/${vulnId}`)
-
-                    if (resBackup.data && resBackup.data.id) {
-                        let sevDisplay = 'Check Ref';
-                        if (resBackup.data.severity && resBackup.data.severity.length > 0) {
-                            sevDisplay = resBackup.data.severity[0].score || resBackup.data.severity[0].type;
+                        // 3. ถ้าไม่มี -> ลอง OSV
+                        const resBackup = await axios.get(`http://localhost:8081/api/proxy/ghsa/${vulnId}`)
+                        if (resBackup.data && resBackup.data.id) {
+                            let sevDisplay = 'Check Ref';
+                            if (resBackup.data.severity && resBackup.data.severity.length > 0) {
+                                sevDisplay = resBackup.data.severity[0].score || resBackup.data.severity[0].type;
+                            }
+                            details = {
+                                id: resBackup.data.id,
+                                summary: resBackup.data.summary || "No description.",
+                                published: resBackup.data.published,
+                                cvss: sevDisplay,
+                                references: resBackup.data.references ? resBackup.data.references.map(r => r.url) : []
+                            }
+                        } else {
+                            throw new Error("Not found anywhere")
                         }
-
-                        details = {
-                            id: resBackup.data.id,
-                            summary: resBackup.data.summary || resBackup.data.details,
-                            published: resBackup.data.published,
-                            cvss: sevDisplay,
-                            references: resBackup.data.references ? resBackup.data.references.map(r => r.url) : []
-                        }
-                    } else {
-                        throw new Error("Not found in any database")
                     }
                 }
             }
-            // CASE B: GHSA IDs
+            // CASE C: GHSA
             else if (vulnId.startsWith('GHSA-')) {
                 const res = await axios.get(`http://localhost:8081/api/proxy/ghsa/${vulnId}`)
                 if (res.data) {
@@ -109,39 +141,26 @@ function DeepAnalytics() {
                     if (res.data.severity && res.data.severity.length > 0) {
                         sevDisplay = res.data.severity[0].score || res.data.severity[0].type;
                     }
-
                     details = {
                         id: res.data.id,
-                        summary: res.data.summary || res.data.details || "No description available.",
+                        summary: res.data.summary,
                         published: res.data.published,
                         cvss: sevDisplay,
                         references: res.data.references ? res.data.references.map(r => r.url) : []
                     }
                 }
             }
-            // CASE C: Internal Findings
-            else {
-                throw new Error("Internal/Private Finding")
-            }
 
             setVulnDetails(details)
 
         } catch (err) {
-            console.warn("Lookup finalized with error:", err)
-
-            let failMsg = "Details not found in public databases."
-
-            // เช็คว่าเป็น CVE ของปีอนาคตไหท
+            let failMsg = "Details not found."
             if (vulnId.includes('2025') || vulnId.includes('2026')) {
-                failMsg = `This ID (${vulnId}) corresponds to a simulated or future vulnerability timeframe (System Year: 2026). Public databases (NVD/MITRE) do not have records for this yet.`
-            } else if (!vulnId.startsWith('CVE') && !vulnId.startsWith('GHSA')) {
-                failMsg = "This appears to be an internal scanner finding (e.g., Secret Key, Misconfiguration), not a public CVE."
+                failMsg = `⚠️ Future/Simulated Vulnerability (${vulnId}).`
+            } else if (vulnId.startsWith('CKV') || vulnId.includes('SECRET')) {
+                failMsg = "Internal scanner finding. Please run SQL Insert to populate details manually."
             }
-
-            setVulnDetails({
-                error: true,
-                summary: failMsg
-            })
+            setVulnDetails({ error: true, summary: failMsg })
         } finally {
             setLoadingDetails(false)
         }
@@ -158,7 +177,7 @@ function DeepAnalytics() {
                 <h1 className="text-4xl font-bold text-white mb-2 flex items-center gap-3">
                     Full Spectrum Analysis
                 </h1>
-                <p className="text-gray-400 text-lg">Click on any bar to see real-time intelligence.</p>
+                <p className="text-gray-400 text-lg">Click on bar to see real-time Summary.</p>
             </div>
 
             {/* --- Controls Bar --- */}
@@ -278,7 +297,6 @@ function DeepAnalytics() {
                                     <div className="flex items-center gap-4">
                                         <div className="bg-gray-800 p-3 rounded-lg text-center min-w-[100px]">
                                             <span className="text-xs font-bold text-gray-500 uppercase tracking-wider block">Severity</span>
-                                            {/* ตรงนี้จะแสดง Score หรือ Vector string */}
                                             <span className="text-sm font-bold text-yellow-400 break-all">
                                                 {vulnDetails.cvss}
                                             </span>
@@ -317,7 +335,6 @@ function DeepAnalytics() {
                                 // Error/Not Found
                                 <div className="text-center py-8">
                                     <div className="bg-red-500/10 text-red-400 p-4 rounded-xl border border-red-500/20 inline-block mb-4">
-                                        <ShieldAlert size={48} className="mx-auto" />
                                     </div>
                                     <h4 className="text-lg font-bold text-white mb-2">Intelligence Not Available</h4>
                                     <p className="text-gray-400 max-w-md mx-auto text-sm leading-relaxed">

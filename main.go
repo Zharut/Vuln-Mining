@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"vuln-scanner/internal/database"
+	"vuln-scanner/internal/models"
 	"vuln-scanner/internal/services"
 
 	"github.com/joho/godotenv"
@@ -16,13 +17,11 @@ import (
 )
 
 func main() {
-	//โหลด Config - ต่อ Database
 	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️  Warning: .env file not found")
 	}
 	database.ConnectDB()
 
-	//แสดงเมนูเลือกโหมด
 	fmt.Println("     Vulnerability Scanner & Dashboard   ")
 	fmt.Println("==========================================")
 	fmt.Println("1.  Run Scanner (Deep Mining)")
@@ -41,48 +40,78 @@ func main() {
 	}
 }
 
-//รันระบบสแกน
 func runScanner(reader *bufio.Reader) {
-	fmt.Println("\n🔎 === GitHub Vulnerability Deep Miner (Auto-Sampling) ===")
+	fmt.Println("\nGitHub Vulnerability Deep Miner")
 
-	// รับเงื่อนไขการกรอง Repo
 	fmt.Print("1. Language (e.g. Go, Python, empty for all): ")
 	lang, _ := reader.ReadString('\n')
 	lang = strings.TrimSpace(lang)
 
-	fmt.Print("2. Minimum Stars: ")
-	starsStr, _ := reader.ReadString('\n')
-	minStars, _ := strconv.Atoi(strings.TrimSpace(starsStr))
+	fmt.Print("2. Minimum Stars (e.g. 100): ")
+	minStr, _ := reader.ReadString('\n')
+	minStars, _ := strconv.Atoi(strings.TrimSpace(minStr))
 
-	fmt.Print("3. Max Repos to find: ")
+	fmt.Print("3. Maximum Stars (Press Enter for No Limit): ")
+	maxStr, _ := reader.ReadString('\n')
+	maxStars, _ := strconv.Atoi(strings.TrimSpace(maxStr))
+
+	fmt.Print("4. New Repos to find: ")
 	limitStr, _ := reader.ReadString('\n')
-	repoLimit, _ := strconv.Atoi(strings.TrimSpace(limitStr))
-	if repoLimit == 0 {
-		repoLimit = 1
-	}
+	targetCount, _ := strconv.Atoi(strings.TrimSpace(limitStr)) // จำนวนเป้าหมายที่ต้องการ
+	if targetCount == 0 { targetCount = 1 }
 
-	// เริ่มค้นหา Repositories
-	fmt.Printf("\n📡 Searching GitHub...")
-	projects, err := services.SearchRepositories(lang, minStars, repoLimit)
+	fmt.Printf("\nSearching GitHub...\n")
+	
+	fetchBuffer := targetCount + 50 
+	if fetchBuffer > 100 { fetchBuffer = 100 } // GitHub API จำกัด per_page สูงสุดที่ 100
+
+	projects, err := services.SearchRepositories(lang, minStars, maxStars, fetchBuffer)
 	if err != nil {
-		log.Fatalf("❌ Search Error: %v", err)
+		log.Fatalf("Search Error: %v", err)
 	}
 
-	fmt.Printf("🎯 Found %d repositories.\n", len(projects))
+	fmt.Printf("Fetched top %d candidates to find %d new repositories...\n", len(projects), targetCount)
 
-	// ลูปสแกนแต่ละโปรเจกต์
-	for i, project := range projects {
-		fmt.Printf("\n["+strconv.Itoa(i+1)+"/"+strconv.Itoa(len(projects))+"] 🚀 Processing: %s/%s\n", project.Owner, project.RepoName)
+	processedCount := 0 // ตัวนับจำนวนที่ทำสำเร็จ
 
-		// บันทึก Project ลง DB
+	for _, project := range projects {
+		// ถ้าครบตามเป้าหมายแล้ว ให้หยุดทันที
+		if processedCount >= targetCount {
+			break
+		}
+
+		fmt.Printf("\nChecking candidate: %s/%s (%0.f)\n", project.Owner, project.RepoName, project.Stars)
+
+		// 1. เช็คว่ามีใน DB หรือยัง
+		var count int64
+		database.DB.Model(&models.Project{}).Where("repo_url = ?", project.RepoURL).Count(&count)
+		
+		if count > 0 {
+			// เจอซ้ำ -> ข้ามเงียบๆ หรือบอกสั้นๆ
+			fmt.Print("Exists in DB. Skipping next...\r") // ใช้ \r เพื่อทับบรรทัดเดิมจะได้ไม่รก
+			continue 
+		}
+
+		// 2. ถ้าเป็นตัวใหม่ -> เริ่มกระบวนการ
+		fmt.Println("\nNEW TARGET FOUND Starting Deep Scan...")
+		
+		// Save Project
 		database.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "project_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"stars", "updated_at"}),
 		}).Save(&project)
 
-		// เรียกใช้ Deep Scan (แบบ Sampling หาร 10)
+		// Start Scan
 		services.ProcessRepositoryHistory(project)
+		
+		processedCount++ // นับเพิ่ม 1
+		fmt.Printf("Progress: [%d/%d] New Repos Scanned\n", processedCount, targetCount)
 	}
 
-	fmt.Println("\nDeep Mining Completed")
+	if processedCount == 0 {
+		fmt.Println("\nNo NEW repositories found in this batch.")
+		fmt.Println("Try adjusting 'Min/Max Stars' to find a different set of projects.")
+	} else {
+		fmt.Println("\nMission Complete! Found and scanned", processedCount, "new repositories.")
+	}
 }
