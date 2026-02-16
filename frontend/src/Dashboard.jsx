@@ -44,14 +44,13 @@ function Dashboard() {
             <header className="mb-8 border-b border-gray-800 pb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h1 className="text-3xl font-bold text-green-500 flex items-center gap-2">
-                        <ShieldAlert /> Vulnerability Analytics Engine
+                        Vulnerability Analytics Engine
                     </h1>
                     <p className="text-gray-400">Dynamic Grouping & Filtering System</p>
                 </div>
 
                 {/* ปุ่มไปหน้า Deep Analysis */}
                 <Link to="/deep-dive" className="bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg font-bold flex items-center gap-2 transition shadow-lg shadow-purple-900/20">
-                    <Microscope size={20} />
                     Deep Analysis
                 </Link>
             </header>
@@ -62,7 +61,7 @@ function Dashboard() {
                 {/* 1. Group By Setting */}
                 <div className="bg-gray-900 p-5 rounded-xl border border-gray-800">
                     <h3 className="text-blue-400 font-bold mb-3 flex items-center gap-2">
-                        <Layers size={20} /> Group By
+                        Group By
                     </h3>
                     <select
                         className="w-full bg-gray-950 border border-gray-700 p-3 rounded text-white focus:border-blue-500 outline-none"
@@ -79,7 +78,7 @@ function Dashboard() {
                 {/* 2. Severity Filter */}
                 <div className="bg-gray-900 p-5 rounded-xl border border-gray-800">
                     <h3 className="text-red-400 font-bold mb-3 flex items-center gap-2">
-                        <Filter size={20} /> Severity Filter
+                        Severity Filter
                     </h3>
                     <div className="grid grid-cols-2 gap-2">
                         {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'].map(sev => (
@@ -101,7 +100,7 @@ function Dashboard() {
                 {/* 3. Star Filter */}
                 <div className="bg-gray-900 p-5 rounded-xl border border-gray-800">
                     <h3 className="text-yellow-400 font-bold mb-3 flex items-center gap-2">
-                        <Database size={20} /> Project Quality
+                        Project Quality
                     </h3>
                     <div className="space-y-2">
                         <label className="text-sm text-gray-400">Minimum Stars:</label>
@@ -115,13 +114,12 @@ function Dashboard() {
                 </div>
             </div>
 
-            {/* --- 📊 RESULT SECTION --- */}
+            {/*RESULT*/}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
 
                 {/* Graph */}
                 <div className="lg:col-span-2 bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl min-h-[400px]">
                     <h3 className="text-white font-bold mb-6 flex items-center gap-2">
-                        <BarChart3 size={20} className="text-green-500" />
                         Visual Distribution
                     </h3>
                     <div className="h-[350px] w-full">
@@ -144,7 +142,6 @@ function Dashboard() {
                 {/* Table */}
                 <div className="bg-gray-900 p-6 rounded-xl border border-gray-800 shadow-xl overflow-hidden flex flex-col">
                     <h3 className="text-white font-bold mb-4 flex items-center gap-2">
-                        <Database size={20} className="text-purple-500" />
                         Detailed Counts
                     </h3>
                     <div className="overflow-y-auto flex-1 pr-2 max-h-[400px]">

@@ -133,7 +133,7 @@ function DeepAnalytics() {
 
             // เช็คว่าเป็น CVE ของปีอนาคตไหท
             if (vulnId.includes('2025') || vulnId.includes('2026')) {
-                failMsg = `⚠️ This ID (${vulnId}) corresponds to a simulated or future vulnerability timeframe (System Year: 2026). Public databases (NVD/MITRE) do not have records for this yet.`
+                failMsg = `This ID (${vulnId}) corresponds to a simulated or future vulnerability timeframe (System Year: 2026). Public databases (NVD/MITRE) do not have records for this yet.`
             } else if (!vulnId.startsWith('CVE') && !vulnId.startsWith('GHSA')) {
                 failMsg = "This appears to be an internal scanner finding (e.g., Secret Key, Misconfiguration), not a public CVE."
             }
@@ -156,7 +156,6 @@ function DeepAnalytics() {
             </Link>
             <div className="mb-10">
                 <h1 className="text-4xl font-bold text-white mb-2 flex items-center gap-3">
-                    <Trophy className="text-yellow-500" size={40} />
                     Full Spectrum Analysis
                 </h1>
                 <p className="text-gray-400 text-lg">Click on any bar to see real-time intelligence.</p>
