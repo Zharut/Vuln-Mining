@@ -15,7 +15,7 @@ function ProjectDetail() {
                 setProject(res.data)
                 // เลือก Commit ล่าสุดเป็นค่าเริ่มต้น
                 if (res.data.Commits && res.data.Commits.length > 0) {
-                    // เรียงลำดับตามเวลา (ล่าสุดอยู่บน)
+                    // เรียงลำดับตามเวลา
                     const sorted = res.data.Commits.sort((a, b) => new Date(b.committed_at) - new Date(a.committed_at))
                     setSelectedCommit(sorted[0])
                 }
@@ -27,7 +27,7 @@ function ProjectDetail() {
     if (loading) return <div className="p-10 text-center text-green-500">Loading details...</div>
     if (!project) return <div className="p-10 text-center text-red-500">Project not found</div>
 
-    // รวบรวม Findings ของ Commit ที่เลือก
+    // รวม Findings ของ Commit ที่เลือก
     const currentFindings = selectedCommit?.Scans?.flatMap(s => s.Findings || []) || []
 
     return (

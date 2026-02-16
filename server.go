@@ -1,7 +1,9 @@
 package main
 
 import (
+	"io"
 	"log"
+	"net/http"
 	"vuln-scanner/internal/database"
 	"vuln-scanner/internal/models"
 
@@ -9,11 +11,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// StartServer : ฟังก์ชันหลักสำหรับเริ่ม API Server
 func StartServer() {
 	r := gin.Default()
 
-	// 1. ตั้งค่า CORS (อนุญาตให้ Frontend Port 5173 เชื่อมต่อได้)
+	// 1. Config CORS
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://127.0.0.1:5173"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
@@ -22,9 +23,6 @@ func StartServer() {
 		AllowCredentials: true,
 	}))
 
-	// --- 🟢 GROUP 1: BASIC DATA (ข้อมูลพื้นฐาน) ---
-
-	// API: ดึงสถิติรวม (Total Projects / Total Vulns)
 	r.GET("/api/stats", func(c *gin.Context) {
 		var projectCount int64
 		var vulnCount int64
@@ -33,7 +31,6 @@ func StartServer() {
 		c.JSON(200, gin.H{"total_projects": projectCount, "total_vulns": vulnCount})
 	})
 
-	// API: ดึงรายชื่อภาษาทั้งหมด (สำหรับ Dropdown)
 	r.GET("/api/options/languages", func(c *gin.Context) {
 		var langs []string
 		database.DB.Model(&models.Project{}).
@@ -44,35 +41,23 @@ func StartServer() {
 		c.JSON(200, langs)
 	})
 
-	// API: ค้นหาและกรอง Projects
 	r.GET("/api/projects", func(c *gin.Context) {
 		db := database.DB.Model(&models.Project{}).Preload("Commits")
-
-		// Filter: Language
 		if lang := c.Query("lang"); lang != "" {
 			db = db.Where("language ILIKE ?", "%"+lang+"%")
 		}
-		// Filter: Stars
 		if minStars := c.Query("min_stars"); minStars != "" {
 			db = db.Where("stars >= ?", minStars)
 		}
-		if maxStars := c.Query("max_stars"); maxStars != "" {
-			db = db.Where("stars <= ?", maxStars)
-		}
-
 		var projects []models.Project
 		db.Order("stars DESC").Find(&projects)
 		c.JSON(200, projects)
 	})
 
-	// API: เจาะลึกรายโปรเจกต์ (Project Details + Timeline)
 	r.GET("/api/project/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		var project models.Project
-
-		// ดึง Project -> Commits -> Scans -> Findings
 		err := database.DB.Preload("Commits.Scans.Findings").First(&project, "project_id = ?", id).Error
-		
 		if err != nil {
 			c.JSON(404, gin.H{"error": "Project not found"})
 			return
@@ -80,9 +65,6 @@ func StartServer() {
 		c.JSON(200, project)
 	})
 
-	// --- 🟡 GROUP 2: DASHBOARD ANALYTICS (กราฟหน้าแรก) ---
-
-	// API: Dynamic Grouping & Filtering (กราฟแท่งหน้าแรก)
 	r.GET("/api/analytics", func(c *gin.Context) {
 		groupBy := c.DefaultQuery("group_by", "vulnerability_id")
 		minStars := c.DefaultQuery("min_stars", "0")
@@ -94,7 +76,6 @@ func StartServer() {
 		}
 		var results []StatResult
 
-		// Query แบบ Join 4 ตาราง
 		query := database.DB.Table("findings").
 			Joins("JOIN scans ON findings.scan_id = scans.scan_id").
 			Joins("JOIN commits ON scans.commit_id = commits.commit_id").
@@ -105,7 +86,6 @@ func StartServer() {
 			query = query.Where("findings.severity IN ?", severities)
 		}
 
-		// เลือก field ที่จะ Group By
 		dbField := "findings.vulnerability_id"
 		switch groupBy {
 		case "language":
@@ -124,9 +104,6 @@ func StartServer() {
 		c.JSON(200, results)
 	})
 
-	// --- 🔴 GROUP 3: DEEP DIVE ANALYTICS (หน้าวิเคราะห์ลึก) ---
-
-	// API: The Matrix (Language vs Vulnerability)
 	r.GET("/api/matrix", func(c *gin.Context) {
 		xAxis := c.DefaultQuery("x_axis", "language")
 		yAxis := c.DefaultQuery("y_axis", "severity")
@@ -161,10 +138,8 @@ func StartServer() {
 		c.JSON(200, results)
 	})
 
-	// API: Trends (แนวโน้มการเกิดช่องโหว่ตามเวลา)
 	r.GET("/api/trends", func(c *gin.Context) {
 		lang := c.Query("lang")
-
 		type TrendPoint struct {
 			CommitDate string `json:"date"`
 			VulnCount  int    `json:"count"`
@@ -181,19 +156,15 @@ func StartServer() {
 		if lang != "" {
 			query = query.Where("projects.language = ?", lang)
 		}
-
 		query.Group("projects.repo_name, commits.committed_at").
 			Order("commits.committed_at ASC").
 			Scan(&trends)
-
 		c.JSON(200, trends)
 	})
 
-	// API: Top Frequent vs Top Fixed (รายงานพิเศษ)
 	r.GET("/api/report/vulnerabilities", func(c *gin.Context) {
 		lang := c.Query("lang")
-		mode := c.Query("mode") // frequent, fixed
-
+		mode := c.Query("mode")
 		type RankResult struct {
 			Name  string `json:"name"`
 			Count int    `json:"count"`
@@ -201,7 +172,6 @@ func StartServer() {
 		var results []RankResult
 
 		if mode == "fixed" {
-			// Logic: เคยเจอในอดีต แต่ไม่เจอใน Commit ล่าสุด (หายไป = แก้แล้ว)
 			sql := `
 				WITH AllFindings AS (
 					SELECT p.project_id, f.vulnerability_id
@@ -227,12 +197,10 @@ func StartServer() {
 					ON a.project_id = cur.project_id AND a.vulnerability_id = cur.vulnerability_id
 				WHERE cur.project_id IS NULL 
 				GROUP BY a.vulnerability_id
-				ORDER BY count DESC
-				LIMIT 10;
+				ORDER BY count DESC;
 			`
 			database.DB.Raw(sql, lang, lang).Scan(&results)
 		} else {
-			// Logic: เจอบ่อยสุด (นับดื้อๆ)
 			database.DB.Table("findings").
 				Select("findings.vulnerability_id as name, COUNT(*) as count").
 				Joins("JOIN scans ON findings.scan_id = scans.scan_id").
@@ -241,14 +209,52 @@ func StartServer() {
 				Where("projects.language = ?", lang).
 				Group("findings.vulnerability_id").
 				Order("count DESC").
-				Limit(10).
 				Scan(&results)
 		}
-
 		c.JSON(200, results)
 	})
 
-	// ------------------------------------------
+	// ฟังก์ชันช่วยยิง Request
+	fetchWithUA := func(url string) (*http.Response, error) {
+		client := &http.Client{}
+		req, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			return nil, err
+		}
+		//User-Agent
+		req.Header.Set("User-Agent", "VulnScanner-Student-Project/1.0")
+		return client.Do(req)
+	}
+
+	// Proxy สำหรับดึง CVE
+	r.GET("/api/proxy/cve/:id", func(c *gin.Context) {
+		id := c.Param("id")
+
+		//ดึงจาก cve.circl.lu
+		resp, err := fetchWithUA("https://cve.circl.lu/api/cve/" + id)
+		if err == nil && resp.StatusCode == 200 {
+			defer resp.Body.Close()
+
+			c.Status(resp.StatusCode)
+			io.Copy(c.Writer, resp.Body)
+			return
+		}
+		c.JSON(404, gin.H{"error": "CVE not found in external databases"})
+	})
+
+	// Proxy สำหรับดึง GHSA
+	r.GET("/api/proxy/ghsa/:id", func(c *gin.Context) {
+		id := c.Param("id")
+		resp, err := fetchWithUA("https://api.osv.dev/v1/vulns/" + id)
+		if err != nil {
+			c.JSON(500, gin.H{"error": "Failed to fetch"})
+			return
+		}
+		defer resp.Body.Close()
+		c.Status(resp.StatusCode)
+		io.Copy(c.Writer, resp.Body)
+	})
+
 	log.Println("🚀 Server running on http://localhost:8081")
 	if err := r.Run(":8081"); err != nil {
 		log.Fatal("❌ Server failed to start:", err)

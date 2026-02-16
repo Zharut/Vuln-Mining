@@ -16,35 +16,32 @@ import (
 )
 
 func main() {
-	// 1. โหลด Config และต่อ Database (ทำครั้งเดียวที่นี่)
+	//โหลด Config - ต่อ Database
 	if err := godotenv.Load(); err != nil {
 		log.Println("⚠️  Warning: .env file not found")
 	}
 	database.ConnectDB()
 
-	// 2. แสดงเมนูเลือกโหมด
-	fmt.Println("\n==========================================")
-	fmt.Println("   🛡️  Vulnerability Scanner & Dashboard   ")
+	//แสดงเมนูเลือกโหมด
+	fmt.Println("     Vulnerability Scanner & Dashboard   ")
 	fmt.Println("==========================================")
-	fmt.Println("1. 🚀 Run Scanner (Deep Mining) -> สแกนหาช่องโหว่")
-	fmt.Println("2. 🌐 Start Web Server (Dashboard) -> เปิด API ให้หน้าเว็บ")
-	fmt.Print("\nSelect option (1 or 2): ")
+	fmt.Println("1.  Run Scanner (Deep Mining)")
+	fmt.Println("2.  Start Web Server (Dashboard)")
+	fmt.Print("\nSelect 1 or 2: ")
 
 	reader := bufio.NewReader(os.Stdin)
 	choice, _ := reader.ReadString('\n')
 	choice = strings.TrimSpace(choice)
 
 	if choice == "2" {
-		// ถ้าเลือก 2 -> ไปเรียกฟังก์ชันใน server.go
 		fmt.Println("\nStarting Web Server...")
 		StartServer()
 	} else {
-		// ถ้าเลือก 1 (หรือกด Enter) -> รันระบบสแกน
 		runScanner(reader)
 	}
 }
 
-// ฟังก์ชันสำหรับรันระบบสแกน (ย้าย Logic เดิมมาไว้ตรงนี้)
+//รันระบบสแกน
 func runScanner(reader *bufio.Reader) {
 	fmt.Println("\n🔎 === GitHub Vulnerability Deep Miner (Auto-Sampling) ===")
 
@@ -77,7 +74,7 @@ func runScanner(reader *bufio.Reader) {
 	for i, project := range projects {
 		fmt.Printf("\n["+strconv.Itoa(i+1)+"/"+strconv.Itoa(len(projects))+"] 🚀 Processing: %s/%s\n", project.Owner, project.RepoName)
 
-		// บันทึก Project ลง DB ก่อน
+		// บันทึก Project ลง DB
 		database.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "project_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"stars", "updated_at"}),
@@ -87,5 +84,5 @@ func runScanner(reader *bufio.Reader) {
 		services.ProcessRepositoryHistory(project)
 	}
 
-	fmt.Println("\n✨✨✨ Deep Mining Completed! ✨✨✨")
+	fmt.Println("\nDeep Mining Completed")
 }

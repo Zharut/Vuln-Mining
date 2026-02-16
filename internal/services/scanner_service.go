@@ -18,10 +18,6 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// ==========================================
-// 1. Structs for Tool Outputs
-// ==========================================
-
 type SemgrepOutput struct {
 	Results []struct {
 		CheckID string `json:"check_id"`
@@ -71,10 +67,6 @@ type CheckovOutput []struct {
 	} `json:"results"`
 }
 
-// ==========================================
-// 2. Helper Functions
-// ==========================================
-
 func GetAllCommits(repoPath string) ([]models.Commit, error) {
 	cmd := exec.Command("git", "log", "--reverse", "--format=%H|%an|%cd|%s", "--date=iso")
 	cmd.Dir = repoPath
@@ -107,23 +99,13 @@ func GetAllCommits(repoPath string) ([]models.Commit, error) {
 	return commits, nil
 }
 
-// ==========================================
-// 3. Independent Tool Runners (แยกฟังก์ชัน)
-// ==========================================
-
 func runSemgrep(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
 	outFile := filepath.Join(repoPath, "semgrep.json")
 	
-	// Run Command
 	err := exec.Command("semgrep", "scan", "--config=auto", "--json", "--output="+outFile, ".").Run()
-	// หมายเหตุ: Semgrep คืนค่า exit code 1 ถ้าเจอช่องโหว่ ดังนั้นเราไม่ถือว่าเป็น Error ร้ายแรง
-	if err != nil && !strings.Contains(err.Error(), "exit status 1") {
-		// ถ้า Error จริงๆ (เช่น หาไฟล์ไม่เจอ) ค่อย return error
-		// return nil, err 
-	}
+	if err != nil && !strings.Contains(err.Error(), "exit status 1") {}
 
-	// Parse
 	if data, err := os.ReadFile(outFile); err == nil {
 		var out SemgrepOutput
 		json.Unmarshal(data, &out)
@@ -144,12 +126,10 @@ func runTrivy(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
 	outFile := filepath.Join(repoPath, "trivy.json")
 
-	// Run
 	if err := exec.Command("trivy", "fs", ".", "--format", "json", "--output", outFile).Run(); err != nil {
 		return nil, err
 	}
 
-	// Parse
 	if data, err := os.ReadFile(outFile); err == nil {
 		var out TrivyOutput
 		json.Unmarshal(data, &out)
@@ -224,10 +204,6 @@ func runCheckov(repoPath string, scanID string) ([]models.Finding, error) {
 	return findings, nil
 }
 
-// ==========================================
-// 4. Main Process Logic (Updated)
-// ==========================================
-
 func ProcessRepositoryHistory(project models.Project) {
 	targetDir := filepath.Join("scanned_repos", project.RepoName)
 
@@ -236,7 +212,7 @@ func ProcessRepositoryHistory(project models.Project) {
 		os.RemoveAll(targetDir)
 	}()
 
-	// 1. Clone/Pull
+	//Clone/Pull
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
 		fmt.Printf("⬇️  Cloning %s...\n", project.RepoURL)
 		if err := exec.Command("git", "clone", project.RepoURL, targetDir).Run(); err != nil {
@@ -247,7 +223,7 @@ func ProcessRepositoryHistory(project models.Project) {
 		exec.Command("git", "-C", targetDir, "pull").Run()
 	}
 
-	// 2. Get Commits
+	//Get Commits
 	fmt.Println("📜 Fetching history...")
 	allCommits, err:= GetAllCommits(targetDir)
 	if err != nil {
@@ -257,7 +233,7 @@ func ProcessRepositoryHistory(project models.Project) {
 	totalCommits := len(allCommits)
 	fmt.Printf("✅ Total Commits: %d\n", totalCommits)
 
-	// Sampling Logic (Total/10)
+	//แบ่ง 10
 	var selectedCommits []models.Commit
 	step := totalCommits / 10
 	if step < 1 { step = 1 }
@@ -270,14 +246,14 @@ func ProcessRepositoryHistory(project models.Project) {
 
 	fmt.Printf("🚀 Scanning %d snapshots with 4 Engines...\n", len(selectedCommits))
 
-	// 3. Loop Commits
+	//Loop Commits
 	for i, commit := range selectedCommits {
 		fmt.Printf("\n[%d/%d] Snapshot: %s\n", i+1, len(selectedCommits), commit.CommitHash[:7])
 
-		// Checkout
+		//Checkout
 		exec.Command("git", "-C", targetDir, "checkout", "-f", commit.CommitHash).Run()
 
-		// Save Commit
+		//Save
 		commit.ProjectID = project.ProjectID
 		database.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "commit_hash"}},
@@ -287,26 +263,21 @@ func ProcessRepositoryHistory(project models.Project) {
 		var dbCommit models.Commit
 		database.DB.Where("commit_hash = ?", commit.CommitHash).First(&dbCommit)
 
-		// ======================================================
-		// ✨ แยกการสแกนทีละเครื่องมือ (Semgrep, Trivy, Gitleaks, Checkov)
-		// ======================================================
 		toolList := []string{"Semgrep", "Trivy", "Gitleaks", "Checkov"}
 		
 		for _, toolName := range toolList {
-			fmt.Printf("    👉 %-8s : ", toolName) // Print aligned
+			fmt.Printf("    👉 %-8s : ", toolName)
 
-			// A. Create Scan Record (Running)
 			scanID := uuid.New().String()
 			scan := models.Scan{
 				ScanID:     scanID,
 				CommitID:   dbCommit.CommitID,
-				ToolUsed:   toolName, // <--- บันทึกชื่อ Tool แยกเลย
+				ToolUsed:   toolName,
 				ScanStatus: "running",
 				StartedAt:  time.Now(),
 			}
 			database.DB.Create(&scan)
 
-			// B. Run Specific Tool
 			var findings []models.Finding
 			var err error
 
@@ -321,20 +292,17 @@ func ProcessRepositoryHistory(project models.Project) {
 				findings, err = runCheckov(targetDir, scanID)
 			}
 
-			// C. Update Scan Status & Save Findings
 			scan.FinishedAt = time.Now()
 			scan.ScanStatus = "completed"
 			
 			if err != nil {
-				// กรณี Error
 				scan.LogOutput = fmt.Sprintf("Error: %v", err)
 				fmt.Printf("❌ Error\n")
 			} else {
-				// กรณี Success
 				scan.LogOutput = fmt.Sprintf("Findings: %d", len(findings))
 				if len(findings) > 0 {
 					fmt.Printf("🔥 %d Found\n", len(findings))
-					// Save Findings
+
 					database.DB.CreateInBatches(findings, 100)
 				} else {
 					fmt.Printf("✅ Clean\n")
