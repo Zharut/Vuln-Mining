@@ -4,7 +4,6 @@ import (
 	"time"
 )
 
-// ตรงกับตาราง PROJECTS
 type Project struct {
 	ProjectID  string    `gorm:"primaryKey;column:project_id" json:"project_id"`
 	RepoURL    string    `gorm:"column:repo_url" json:"repo_url"`
@@ -16,12 +15,10 @@ type Project struct {
 	PCreatedAt time.Time `gorm:"column:p_created_at" json:"p_created_at"`
 	UpdatedAt  time.Time `gorm:"column:updated_at" json:"updated_at"`
 
-	// Relationship: 1 Project มีหลาย Commits
-	// ใช้ json:"Commits" (ตัว C ใหญ่) เพื่อให้ตรงกับโค้ด React ที่เขียนว่า project.Commits
+	//1 Project มีหลาย Commits
 	Commits []Commit `gorm:"foreignKey:ProjectID" json:"Commits"`
 }
 
-// ตรงกับตาราง COMMITS
 type Commit struct {
 	CommitID    string    `gorm:"primaryKey;column:commit_id" json:"commit_id"`
 	ProjectID   string    `gorm:"column:project_id" json:"project_id"`
@@ -32,11 +29,10 @@ type Commit struct {
 	CommittedAt time.Time `gorm:"column:committed_at" json:"committed_at"`
 	CCreatedAt  time.Time `gorm:"column:c_created_at;autoCreateTime" json:"c_created_at"`
 
-	// เพิ่ม Relationship ลงไปเพื่อให้ GORM Preload ข้อมูลลูกได้ (เผื่ออนาคตอยากดูว่า Commit นี้มี Scan อะไรบ้าง)
+	//Commitมี Scan อะไรบ้าง
 	Scans []Scan `gorm:"foreignKey:CommitID" json:"Scans"`
 }
 
-// ตรงกับตาราง SCANS
 type Scan struct {
 	ScanID     string    `gorm:"primaryKey;column:scan_id" json:"scan_id"`
 	CommitID   string    `gorm:"column:commit_id" json:"commit_id"`
@@ -46,7 +42,7 @@ type Scan struct {
 	FinishedAt time.Time `gorm:"column:finished_at" json:"finished_at"`
 	LogOutput  string    `gorm:"column:log_output" json:"log_output"`
 
-	// เพิ่ม Relationship หา Findings
+	//หา Findings
 	Findings []Finding `gorm:"foreignKey:ScanID" json:"Findings"`
 }
 

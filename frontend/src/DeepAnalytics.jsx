@@ -19,12 +19,18 @@ function DeepAnalytics() {
     const [vulnDetails, setVulnDetails] = useState(null)
     const [loadingDetails, setLoadingDetails] = useState(false)
 
-    //Load Languages on Mount
+    // Load Languages
     useEffect(() => {
         axios.get('http://localhost:8081/api/options/languages')
             .then(res => {
-                setLanguages(res.data || [])
-                if (res.data.length > 0) setSelectedLang(res.data[0])
+                // 1. ''  เป็น 'Misc'
+                const processedLangs = (res.data || []).map(l => (!l || l.trim() === '') ? 'Misc' : l);
+
+                // null เป็น Misc
+                const uniqueLangs = [...new Set(processedLangs)];
+
+                setLanguages(uniqueLangs);
+                if (uniqueLangs.length > 0) setSelectedLang(uniqueLangs[0]);
             })
     }, [])
 
@@ -52,14 +58,12 @@ function DeepAnalytics() {
     // ความสูงกราฟ
     const chartHeight = Math.max(500, sortedData.length * 40);
 
-    // --- 4. Smart Data Fetcher (ฉบับสมบูรณ์: รองรับ SQL Manual) ---
     const handleVulnClick = async (vulnId) => {
         setSelectedVuln(vulnId)
         setModalOpen(true)
         setVulnDetails(null)
         setLoadingDetails(true)
 
-        // ฟังก์ชันย่อย: วิ่งไปดูใน Database เครื่องเราเอง
         const checkLocalDB = async (id) => {
             try {
                 const res = await axios.get(`http://localhost:8081/api/knowledge/${id}`)
@@ -77,14 +81,13 @@ function DeepAnalytics() {
                     }
                 }
             } catch (e) {
-                return null // หาไม่เจอ
+                return null
             }
         }
 
         try {
             let details = {}
 
-            // CASE A: พวก Checkov, Gitleaks, Secret (วิ่งไปหาใน DB เราก่อนเลย)
             if (vulnId.startsWith('CKV') || vulnId.startsWith('generic') || vulnId.startsWith('github') || vulnId.includes('SECRET')) {
                 const localData = await checkLocalDB(vulnId)
                 if (localData) {
@@ -93,7 +96,6 @@ function DeepAnalytics() {
                     throw new Error("Internal finding details missing in DB")
                 }
             }
-            // CASE B: CVE IDs
             else if (vulnId.startsWith('CVE-')) {
                 try {
                     // 1. ลองหาเว็บนอกก่อน
@@ -108,12 +110,12 @@ function DeepAnalytics() {
                         }
                     } else { throw new Error("External Empty") }
                 } catch (extErr) {
-                    // 2. ถ้าเว็บนอกล่ม -> มาหาใน DB เรา (เผื่อเราเคยใส่ SQL ไว้)
+                    // 2. ถ้าเว็บนอกล่ม -> มาหาใน DB
                     const localData = await checkLocalDB(vulnId)
                     if (localData) {
                         details = localData
                     } else {
-                        // 3. ถ้าไม่มี -> ลอง OSV
+                        // 3. ถ้าไม่มี ลอง OSV
                         const resBackup = await axios.get(`http://localhost:8081/api/proxy/ghsa/${vulnId}`)
                         if (resBackup.data && resBackup.data.id) {
                             let sevDisplay = 'Check Ref';
@@ -133,7 +135,6 @@ function DeepAnalytics() {
                     }
                 }
             }
-            // CASE C: GHSA
             else if (vulnId.startsWith('GHSA-')) {
                 const res = await axios.get(`http://localhost:8081/api/proxy/ghsa/${vulnId}`)
                 if (res.data) {
@@ -261,7 +262,7 @@ function DeepAnalytics() {
                         </div>
                     </div>
                 ) : (
-                    // Empty State
+                    //empty
                     <div className="flex-1 flex flex-col items-center justify-center text-gray-500 min-h-[400px]">
                         {loading ? <Loader2 className="animate-spin mb-2" size={32} /> : <Search size={48} className="mb-4 opacity-20" />}
                         <p>{loading ? "Analyzing vast datasets..." : "No vulnerabilities found matching these criteria."}</p>

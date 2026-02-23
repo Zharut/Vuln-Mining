@@ -14,7 +14,6 @@ import (
 func StartServer() {
 	r := gin.Default()
 
-	// 1. Config CORS
 	r.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://127.0.0.1:5173"},
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
@@ -31,14 +30,30 @@ func StartServer() {
 		c.JSON(200, gin.H{"total_projects": projectCount, "total_vulns": vulnCount})
 	})
 
-	r.GET("/api/options/languages", func(c *gin.Context) {
-		var langs []string
+r.GET("/api/options/languages", func(c *gin.Context) {
+		var rawLangs []string
+		
 		database.DB.Model(&models.Project{}).
 			Distinct("language").
-			Where("language != ''").
 			Order("language ASC").
-			Pluck("language", &langs)
-		c.JSON(200, langs)
+			Pluck("language", &rawLangs)
+
+		// ค่าว่างให้กลายเป็นคำว่า "Misc"
+		var finalLangs []string
+		hasMisc := false
+
+		for _, l := range rawLangs {
+			if l == "" || l == " " {
+				if !hasMisc {
+					finalLangs = append(finalLangs, "Misc")
+					hasMisc = true
+				}
+			} else {
+				finalLangs = append(finalLangs, l)
+			}
+		}
+
+		c.JSON(200, finalLangs)
 	})
 
 	r.GET("/api/projects", func(c *gin.Context) {
@@ -162,9 +177,10 @@ func StartServer() {
 		c.JSON(200, trends)
 	})
 
-	r.GET("/api/report/vulnerabilities", func(c *gin.Context) {
+r.GET("/api/report/vulnerabilities", func(c *gin.Context) {
 		lang := c.Query("lang")
 		mode := c.Query("mode")
+
 		type RankResult struct {
 			Name  string `json:"name"`
 			Count int    `json:"count"`
@@ -172,45 +188,88 @@ func StartServer() {
 		var results []RankResult
 
 		if mode == "fixed" {
-			sql := `
-				WITH AllFindings AS (
-					SELECT p.project_id, f.vulnerability_id
-					FROM findings f
-					JOIN scans s ON f.scan_id = s.scan_id
-					JOIN commits c ON s.commit_id = c.commit_id
-					JOIN projects p ON c.project_id = p.project_id
-					WHERE p.language = ?
-					GROUP BY p.project_id, f.vulnerability_id
-				),
-				CurrentFindings AS (
-					SELECT p.project_id, f.vulnerability_id
-					FROM findings f
-					JOIN scans s ON f.scan_id = s.scan_id
-					JOIN commits c ON s.commit_id = c.commit_id
-					JOIN projects p ON c.project_id = p.project_id
-					WHERE p.language = ?
-					  AND c.committed_at = (SELECT MAX(committed_at) FROM commits WHERE project_id = p.project_id)
-				)
-				SELECT a.vulnerability_id as name, COUNT(*) as count
-				FROM AllFindings a
-				LEFT JOIN CurrentFindings cur 
-					ON a.project_id = cur.project_id AND a.vulnerability_id = cur.vulnerability_id
-				WHERE cur.project_id IS NULL 
-				GROUP BY a.vulnerability_id
-				ORDER BY count DESC;
-			`
-			database.DB.Raw(sql, lang, lang).Scan(&results)
+			if lang == "Misc" {
+				// กรณีเป็น ไม่มีภาษา
+				sql := `
+					WITH AllFindings AS (
+						SELECT p.project_id, f.vulnerability_id
+						FROM findings f
+						JOIN scans s ON f.scan_id = s.scan_id
+						JOIN commits c ON s.commit_id = c.commit_id
+						JOIN projects p ON c.project_id = p.project_id
+						WHERE p.language = '' OR p.language IS NULL
+						GROUP BY p.project_id, f.vulnerability_id
+					),
+					CurrentFindings AS (
+						SELECT p.project_id, f.vulnerability_id
+						FROM findings f
+						JOIN scans s ON f.scan_id = s.scan_id
+						JOIN commits c ON s.commit_id = c.commit_id
+						JOIN projects p ON c.project_id = p.project_id
+						WHERE (p.language = '' OR p.language IS NULL)
+						  AND c.committed_at = (SELECT MAX(committed_at) FROM commits WHERE project_id = p.project_id)
+					)
+					SELECT a.vulnerability_id as name, COUNT(*) as count
+					FROM AllFindings a
+					LEFT JOIN CurrentFindings cur 
+						ON a.project_id = cur.project_id AND a.vulnerability_id = cur.vulnerability_id
+					WHERE cur.project_id IS NULL 
+					GROUP BY a.vulnerability_id
+					ORDER BY count DESC;
+				`
+				database.DB.Raw(sql).Scan(&results)
+			} else {
+				// ภาษาปกติ
+				sql := `
+					WITH AllFindings AS (
+						SELECT p.project_id, f.vulnerability_id
+						FROM findings f
+						JOIN scans s ON f.scan_id = s.scan_id
+						JOIN commits c ON s.commit_id = c.commit_id
+						JOIN projects p ON c.project_id = p.project_id
+						WHERE p.language = ?
+						GROUP BY p.project_id, f.vulnerability_id
+					),
+					CurrentFindings AS (
+						SELECT p.project_id, f.vulnerability_id
+						FROM findings f
+						JOIN scans s ON f.scan_id = s.scan_id
+						JOIN commits c ON s.commit_id = c.commit_id
+						JOIN projects p ON c.project_id = p.project_id
+						WHERE p.language = ?
+						  AND c.committed_at = (SELECT MAX(committed_at) FROM commits WHERE project_id = p.project_id)
+					)
+					SELECT a.vulnerability_id as name, COUNT(*) as count
+					FROM AllFindings a
+					LEFT JOIN CurrentFindings cur 
+						ON a.project_id = cur.project_id AND a.vulnerability_id = cur.vulnerability_id
+					WHERE cur.project_id IS NULL 
+					GROUP BY a.vulnerability_id
+					ORDER BY count DESC;
+				`
+				database.DB.Raw(sql, lang, lang).Scan(&results)
+			}
+
 		} else {
-			database.DB.Table("findings").
+			// Frequent (ใช้ GORM)
+			query := database.DB.Table("findings").
 				Select("findings.vulnerability_id as name, COUNT(*) as count").
 				Joins("JOIN scans ON findings.scan_id = scans.scan_id").
 				Joins("JOIN commits ON scans.commit_id = commits.commit_id").
-				Joins("JOIN projects ON commits.project_id = projects.project_id").
-				Where("projects.language = ?", lang).
-				Group("findings.vulnerability_id").
+				Joins("JOIN projects ON commits.project_id = projects.project_id")
+
+			// กรองตามภาษา
+			if lang == "Misc" {
+				query = query.Where("projects.language = ? OR projects.language IS NULL", "")
+			} else if lang != "" && lang != "All" {
+				query = query.Where("projects.language = ?", lang)
+			}
+
+			query.Group("findings.vulnerability_id").
 				Order("count DESC").
 				Scan(&results)
 		}
+
 		c.JSON(200, results)
 	})
 
@@ -255,7 +314,7 @@ func StartServer() {
 		io.Copy(c.Writer, resp.Body)
 	})
 
-	// --- 🟣 API GROUP 5: LOCAL KNOWLEDGE BASE (ดึงข้อมูลจาก SQL ที่เราใส่เอง) ---
+	// failsafe ดึงจาก sql
 	r.GET("/api/knowledge/:id", func(c *gin.Context) {
 		id := c.Param("id")
 		
@@ -269,19 +328,15 @@ func StartServer() {
 		}
 		var detail VulnDetail
 
-		// ค้นหาในตาราง vulnerability_details
 		if err := database.DB.Table("vulnerability_details").Where("vulnerability_id = ?", id).First(&detail).Error; err != nil {
 			c.JSON(404, gin.H{"error": "Not found in local DB"})
 			return
 		}
-
-		// แปลง Reference JSON string กลับเป็น Array (ถ้าจำเป็น) หรือส่งไปทั้งดุ้นก็ได้
-		// เพื่อความง่าย ส่ง struct ไปเลย Frontend ไปแกะเอง
 		c.JSON(200, detail)
 	})
 
-	log.Println("🚀 Server running on http://localhost:8081")
+	log.Println("Server running on http://localhost:8081")
 	if err := r.Run(":8081"); err != nil {
-		log.Fatal("❌ Server failed to start:", err)
+		log.Fatal("Server failed to start:", err)
 	}
 }

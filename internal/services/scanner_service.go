@@ -22,11 +22,11 @@ type SemgrepOutput struct {
 	Results []struct {
 		CheckID string `json:"check_id"`
 		Path    string `json:"path"`
-		Start   struct { Line int `json:"line"` } `json:"start"`
+		Start   struct{ Line int `json:"line"` } `json:"start"`
 		Extra   struct {
 			Message  string `json:"message"`
 			Severity string `json:"severity"`
-			Metadata struct { CWE []string `json:"cwe"` } `json:"metadata"`
+			Metadata struct{ CWE []string `json:"cwe"` } `json:"metadata"`
 		} `json:"extra"`
 	} `json:"results"`
 }
@@ -40,8 +40,10 @@ type TrivyOutput struct {
 			InstalledVersion string   `json:"InstalledVersion"`
 			FixedVersion     string   `json:"FixedVersion"`
 			Title            string   `json:"Title"`
+			Description      string   `json:"Description"` // 🔥 เพิ่มเพื่อเอาไปลง DB
 			Severity         string   `json:"Severity"`
 			CweIDs           []string `json:"CweIDs"`
+			References       []string `json:"References"`  // 🔥 เพิ่มเพื่อเอาไปลง DB
 		} `json:"Vulnerabilities"`
 	} `json:"Results"`
 }
@@ -63,8 +65,31 @@ type CheckovOutput []struct {
 			FilePath      string `json:"file_path"`
 			FileLineRange []int  `json:"file_line_range"`
 			Severity      string `json:"severity"`
+			Guideline     string `json:"guideline"` // 🔥 เพิ่มเพื่อเอาไปลง DB
 		} `json:"failed_checks"`
 	} `json:"results"`
+}
+
+func saveVulnDetail(id, title, desc, remediation string, score float64, refs []string) {
+	refJson, _ := json.Marshal(refs)
+	if len(refs) == 0 {
+		refJson = []byte("[]")
+	}
+
+	detail := models.VulnerabilityDetail{
+		VulnerabilityID: id,
+		Title:           title,
+		Description:     desc,
+		Remediation:     remediation,
+		CvssScore:       score,
+		ReferencesJSON:  string(refJson),
+	}
+
+	// Upsert ลง DB
+	database.DB.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "vulnerability_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"title", "description", "remediation", "references_json"}),
+	}).Create(&detail)
 }
 
 func GetAllCommits(repoPath string) ([]models.Commit, error) {
@@ -112,6 +137,12 @@ func runSemgrep(repoPath string, scanID string) ([]models.Finding, error) {
 		for _, r := range out.Results {
 			cwe := "UNKNOWN"
 			if len(r.Extra.Metadata.CWE) > 0 { cwe = strings.Split(r.Extra.Metadata.CWE[0], ":")[0] }
+			
+			// Auto-Save Detail
+			sevScore := 5.0
+			if strings.ToUpper(r.Extra.Severity) == "ERROR" { sevScore = 8.0 }
+			saveVulnDetail(r.CheckID, r.Extra.Message, r.Extra.Message, "Review and fix code logic.", sevScore, []string{})
+
 			findings = append(findings, models.Finding{
 				FindingID: uuid.New().String(), ScanID: scanID, Tool: "Semgrep",
 				VulnerabilityID: r.CheckID, CweID: cwe, Severity: strings.ToUpper(r.Extra.Severity),
@@ -137,6 +168,11 @@ func runTrivy(repoPath string, scanID string) ([]models.Finding, error) {
 			for _, v := range res.Vulnerabilities {
 				cwe := "UNKNOWN"
 				if len(v.CweIDs) > 0 { cwe = v.CweIDs[0] }
+				
+				// Auto-Save Detail
+				remediation := fmt.Sprintf("Upgrade %s to version %s", v.PkgName, v.FixedVersion)
+				saveVulnDetail(v.VulnerabilityID, v.Title, v.Description, remediation, 7.0, v.References)
+
 				msg := fmt.Sprintf("%s (%s) -> Fixed: %s | %s", v.PkgName, v.InstalledVersion, v.FixedVersion, v.Title)
 				findings = append(findings, models.Finding{
 					FindingID: uuid.New().String(), ScanID: scanID, Tool: "Trivy",
@@ -159,6 +195,9 @@ func runGitleaks(repoPath string, scanID string) ([]models.Finding, error) {
 		var out []GitleaksResult
 		json.Unmarshal(data, &out)
 		for _, r := range out {
+			// 🔥 Auto-Save Detail
+			saveVulnDetail(r.RuleID, r.Description, "Secret detected by Gitleaks. Hardcoded secrets pose a severe security risk.", "Revoke this secret immediately and rotate credentials.", 9.0, []string{"https://github.com/zricethezav/gitleaks"})
+
 			secretSnippet := r.Secret
 			if len(secretSnippet) > 10 { secretSnippet = secretSnippet[:10] + "..." }
 			findings = append(findings, models.Finding{
@@ -188,6 +227,10 @@ func runCheckov(repoPath string, scanID string) ([]models.Finding, error) {
 		if err := json.Unmarshal(data, &out); err == nil {
 			for _, runner := range out {
 				for _, r := range runner.Results.FailedChecks {
+					
+					// Auto-Save Detail
+					saveVulnDetail(r.CheckID, r.CheckName, r.CheckName, "Refer to guideline: "+r.Guideline, 6.0, []string{r.Guideline})
+
 					line := 0
 					if len(r.FileLineRange) > 0 { line = r.FileLineRange[0] }
 					sev := "FAILED"
@@ -208,32 +251,37 @@ func ProcessRepositoryHistory(project models.Project) {
 	targetDir := filepath.Join("scanned_repos", project.RepoName)
 
 	defer func() {
-		fmt.Printf("\n🧹 Cleaning up: %s\n", targetDir)
+		fmt.Printf("\nCleaning up: %s\n", targetDir)
 		os.RemoveAll(targetDir)
 	}()
 
-	//Clone/Pull
+	// Clone/Pull
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
-		fmt.Printf("⬇️  Cloning %s...\n", project.RepoURL)
+		fmt.Printf("⬇ Cloning %s...\n", project.RepoURL)
 		if err := exec.Command("git", "clone", project.RepoURL, targetDir).Run(); err != nil {
-			log.Printf("❌ Clone Failed: %v\n", err)
+			log.Printf("Clone Failed: %v\n", err)
 			return
 		}
 	} else {
 		exec.Command("git", "-C", targetDir, "pull").Run()
 	}
 
-	//Get Commits
-	fmt.Println("📜 Fetching history...")
+	// Get Commits
+	fmt.Println("Fetching history...")
 	allCommits, err:= GetAllCommits(targetDir)
 	if err != nil {
-		log.Printf("❌ Failed to get commits: %v\n", err)
+		log.Printf("Failed to get commits: %v\n", err)
 		return
 	}
 	totalCommits := len(allCommits)
-	fmt.Printf("✅ Total Commits: %d\n", totalCommits)
+	fmt.Printf("Total Commits: %d\n", totalCommits)
 
-	//แบ่ง 10
+	if totalCommits == 0 {
+		fmt.Println("No commits found.")
+		return
+	}
+
+	// ระบบแบ่ง 10 จุด ลดคอมมิดที่ต้องแสกน
 	var selectedCommits []models.Commit
 	step := totalCommits / 10
 	if step < 1 { step = 1 }
@@ -244,16 +292,16 @@ func ProcessRepositoryHistory(project models.Project) {
 		selectedCommits = append(selectedCommits, allCommits[totalCommits-1])
 	}
 
-	fmt.Printf("🚀 Scanning %d snapshots with 4 Engines...\n", len(selectedCommits))
+	fmt.Printf("Scanning %d snapshots with 4 Engines...\n", len(selectedCommits))
 
-	//Loop Commits
+	// Loop Commits
 	for i, commit := range selectedCommits {
 		fmt.Printf("\n[%d/%d] Snapshot: %s\n", i+1, len(selectedCommits), commit.CommitHash[:7])
 
-		//Checkout
+		// Checkout
 		exec.Command("git", "-C", targetDir, "checkout", "-f", commit.CommitHash).Run()
 
-		//Save
+		// Save
 		commit.ProjectID = project.ProjectID
 		database.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "commit_hash"}},
@@ -266,7 +314,7 @@ func ProcessRepositoryHistory(project models.Project) {
 		toolList := []string{"Semgrep", "Trivy", "Gitleaks", "Checkov"}
 		
 		for _, toolName := range toolList {
-			fmt.Printf("    👉 %-8s : ", toolName)
+			fmt.Printf("    %-8s : ", toolName)
 
 			scanID := uuid.New().String()
 			scan := models.Scan{
@@ -297,15 +345,14 @@ func ProcessRepositoryHistory(project models.Project) {
 			
 			if err != nil {
 				scan.LogOutput = fmt.Sprintf("Error: %v", err)
-				fmt.Printf("❌ Error\n")
+				fmt.Printf("Error\n")
 			} else {
 				scan.LogOutput = fmt.Sprintf("Findings: %d", len(findings))
 				if len(findings) > 0 {
-					fmt.Printf("🔥 %d Found\n", len(findings))
-
+					fmt.Printf("%d Found\n", len(findings))
 					database.DB.CreateInBatches(findings, 100)
 				} else {
-					fmt.Printf("✅ Clean\n")
+					fmt.Printf("Clean\n")
 				}
 			}
 			database.DB.Save(&scan)

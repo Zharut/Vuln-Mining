@@ -44,9 +44,8 @@ function Dashboard() {
             <header className="mb-8 border-b border-gray-800 pb-6 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h1 className="text-3xl font-bold text-green-500 flex items-center gap-2">
-                        Vulnerability Analytics Engine
+                        Vulnerability Analytics
                     </h1>
-                    <p className="text-gray-400">Dynamic Grouping & Filtering System</p>
                 </div>
 
                 {/* ปุ่มไปหน้า Deep Analysis */}

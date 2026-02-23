@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"vuln-scanner/internal/database"
 	"vuln-scanner/internal/models"
@@ -18,14 +19,14 @@ import (
 
 func main() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("⚠️  Warning: .env file not found")
+		log.Println("Warning: .env file not found")
 	}
 	database.ConnectDB()
 
 	fmt.Println("     Vulnerability Scanner & Dashboard   ")
 	fmt.Println("==========================================")
-	fmt.Println("1.  Run Scanner (Deep Mining)")
-	fmt.Println("2.  Start Web Server (Dashboard)")
+	fmt.Println("1.Run Scanner")
+	fmt.Println("2.Dashboard")
 	fmt.Print("\nSelect 1 or 2: ")
 
 	reader := bufio.NewReader(os.Stdin)
@@ -41,7 +42,7 @@ func main() {
 }
 
 func runScanner(reader *bufio.Reader) {
-	fmt.Println("\nGitHub Vulnerability Deep Miner")
+	fmt.Println("\n🔎 === GitHub Vulnerability Deep Miner (Concurrent Mode) ===")
 
 	fmt.Print("1. Language (e.g. Go, Python, empty for all): ")
 	lang, _ := reader.ReadString('\n')
@@ -57,61 +58,87 @@ func runScanner(reader *bufio.Reader) {
 
 	fmt.Print("4. New Repos to find: ")
 	limitStr, _ := reader.ReadString('\n')
-	targetCount, _ := strconv.Atoi(strings.TrimSpace(limitStr)) // จำนวนเป้าหมายที่ต้องการ
+	targetCount, _ := strconv.Atoi(strings.TrimSpace(limitStr))
 	if targetCount == 0 { targetCount = 1 }
 
-	fmt.Printf("\nSearching GitHub...\n")
+	fmt.Printf("\n📡 Searching GitHub...\n")
 	
 	fetchBuffer := targetCount + 50 
-	if fetchBuffer > 100 { fetchBuffer = 100 } // GitHub API จำกัด per_page สูงสุดที่ 100
+	if fetchBuffer > 100 { fetchBuffer = 100 }
 
 	projects, err := services.SearchRepositories(lang, minStars, maxStars, fetchBuffer)
 	if err != nil {
-		log.Fatalf("Search Error: %v", err)
+		log.Fatalf("❌ Search Error: %v", err)
 	}
 
-	fmt.Printf("Fetched top %d candidates to find %d new repositories...\n", len(projects), targetCount)
+	fmt.Printf("🎯 Fetched top %d candidates to find %d new repositories...\n", len(projects), targetCount)
 
-	processedCount := 0 // ตัวนับจำนวนที่ทำสำเร็จ
+	var targetsToScan []models.Project
 
 	for _, project := range projects {
-		// ถ้าครบตามเป้าหมายแล้ว ให้หยุดทันที
-		if processedCount >= targetCount {
-			break
+		if len(targetsToScan) >= targetCount {
+			break // ได้ครบตามจำนวนที่ขอแล้ว
 		}
 
-		fmt.Printf("\nChecking candidate: %s/%s (%0.f)\n", project.Owner, project.RepoName, project.Stars)
-
-		// 1. เช็คว่ามีใน DB หรือยัง
+		// เช็คว่ามีใน DB หรือยัง
 		var count int64
 		database.DB.Model(&models.Project{}).Where("repo_url = ?", project.RepoURL).Count(&count)
 		
 		if count > 0 {
-			// เจอซ้ำ -> ข้ามเงียบๆ หรือบอกสั้นๆ
-			fmt.Print("Exists in DB. Skipping next...\r") // ใช้ \r เพื่อทับบรรทัดเดิมจะได้ไม่รก
+			fmt.Printf("   ⏭️  Exists in DB. Skipping: %s\n", project.RepoName)
 			continue 
 		}
 
-		// 2. ถ้าเป็นตัวใหม่ -> เริ่มกระบวนการ
-		fmt.Println("\nNEW TARGET FOUND Starting Deep Scan...")
-		
-		// Save Project
+		// จอง Project ไว้ใน DBกันการสแกนซ้ำซ้อน
 		database.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "project_id"}},
 			DoUpdates: clause.AssignmentColumns([]string{"stars", "updated_at"}),
 		}).Save(&project)
 
-		// Start Scan
-		services.ProcessRepositoryHistory(project)
-		
-		processedCount++ // นับเพิ่ม 1
-		fmt.Printf("Progress: [%d/%d] New Repos Scanned\n", processedCount, targetCount)
+		targetsToScan = append(targetsToScan, project)
 	}
 
-	if processedCount == 0 {
+	if len(targetsToScan) == 0 {
 		fmt.Println("\nNo NEW repositories found in this batch.")
-		fmt.Println("Try adjusting 'Min/Max Stars' to find a different set of projects.")
-	} else {
-		fmt.Println("\nMission Complete! Found and scanned", processedCount, "new repositories.")
+		return
 	}
+	
+	// อ่านค่าจาก .env
+	maxWorkersStr := os.Getenv("MAX_CONCURRENT_SCANS")
+	maxWorkers, err := strconv.Atoi(maxWorkersStr)
+	if err != nil || maxWorkers < 1 {
+		maxWorkers = 1 // ค่าเริ่มต้นถ้าไม่ได้ตั้งใน .env
+	}
+
+	fmt.Printf("\nStarting Concurrent Scans (Max %d workers) for %d repositories...\n", maxWorkers, len(targetsToScan))
+
+	var wg sync.WaitGroup
+	// ใช้ Channel เป็น Semaphore เพื่อจำกัดจำนวนการทำงานพร้อมกัน
+	sem := make(chan struct{}, maxWorkers) 
+
+	for i, project := range targetsToScan {
+		wg.Add(1)
+
+		// ส่งงานเข้า Goroutine
+		go func(p models.Project, index int) {
+			defer wg.Done() // แจ้ง WaitGroup ว่าเสร็จแล้ว
+
+			sem <- struct{}{} // ขอโควต้าการทำงาน
+			
+			// พองานสแกนเสร็จ คืนโควต้าให้คิวถัดไป
+			defer func() { <-sem }()
+
+			fmt.Printf("\n   ⏳ [%d/%d] Starting Scan: %s/%s\n", index+1, len(targetsToScan), p.Owner, p.RepoName)
+			
+			// เริ่มสแกนจริง
+			services.ProcessRepositoryHistory(p)
+			
+			fmt.Printf("\n   ✅ Finished Scan: %s/%s\n", p.Owner, p.RepoName)
+		}(project, i)
+	}
+
+	wg.Wait() 
+
+	fmt.Println("\n🎉 Mission Complete! All repositories have been scanned.")
+	fmt.Println("You can now start the dashboard (Option 2) to view results.")
 }
