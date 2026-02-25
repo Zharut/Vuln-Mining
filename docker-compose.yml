@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: vulnerability_mining_db
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: vuln_mining_db
+    ports:
+      - "5444:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - "8080:8080"
+
+volumes:
+  pg_data:
