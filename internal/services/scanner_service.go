@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"sync"
 
 	"vuln-scanner/internal/database"
 	"vuln-scanner/internal/models"
@@ -40,10 +41,10 @@ type TrivyOutput struct {
 			InstalledVersion string   `json:"InstalledVersion"`
 			FixedVersion     string   `json:"FixedVersion"`
 			Title            string   `json:"Title"`
-			Description      string   `json:"Description"` // 🔥 เพิ่มเพื่อเอาไปลง DB
+			Description      string   `json:"Description"`
 			Severity         string   `json:"Severity"`
 			CweIDs           []string `json:"CweIDs"`
-			References       []string `json:"References"`  // 🔥 เพิ่มเพื่อเอาไปลง DB
+			References       []string `json:"References"` 
 		} `json:"Vulnerabilities"`
 	} `json:"Results"`
 }
@@ -65,7 +66,7 @@ type CheckovOutput []struct {
 			FilePath      string `json:"file_path"`
 			FileLineRange []int  `json:"file_line_range"`
 			Severity      string `json:"severity"`
-			Guideline     string `json:"guideline"` // 🔥 เพิ่มเพื่อเอาไปลง DB
+			Guideline     string `json:"guideline"`
 		} `json:"failed_checks"`
 	} `json:"results"`
 }
@@ -195,7 +196,7 @@ func runGitleaks(repoPath string, scanID string) ([]models.Finding, error) {
 		var out []GitleaksResult
 		json.Unmarshal(data, &out)
 		for _, r := range out {
-			// 🔥 Auto-Save Detail
+			// Auto-Save Detail
 			saveVulnDetail(r.RuleID, r.Description, "Secret detected by Gitleaks. Hardcoded secrets pose a severe security risk.", "Revoke this secret immediately and rotate credentials.", 9.0, []string{"https://github.com/zricethezav/gitleaks"})
 
 			secretSnippet := r.Secret
@@ -281,7 +282,6 @@ func ProcessRepositoryHistory(project models.Project) {
 		return
 	}
 
-	// ระบบแบ่ง 10 จุด ลดคอมมิดที่ต้องแสกน
 	var selectedCommits []models.Commit
 	step := totalCommits / 10
 	if step < 1 { step = 1 }
@@ -313,50 +313,57 @@ func ProcessRepositoryHistory(project models.Project) {
 
 		toolList := []string{"Semgrep", "Trivy", "Gitleaks", "Checkov"}
 		
+		var toolWg sync.WaitGroup // คุมคิว
+
 		for _, toolName := range toolList {
-			fmt.Printf("    %-8s : ", toolName)
-
-			scanID := uuid.New().String()
-			scan := models.Scan{
-				ScanID:     scanID,
-				CommitID:   dbCommit.CommitID,
-				ToolUsed:   toolName,
-				ScanStatus: "running",
-				StartedAt:  time.Now(),
-			}
-			database.DB.Create(&scan)
-
-			var findings []models.Finding
-			var err error
-
-			switch toolName {
-			case "Semgrep":
-				findings, err = runSemgrep(targetDir, scanID)
-			case "Trivy":
-				findings, err = runTrivy(targetDir, scanID)
-			case "Gitleaks":
-				findings, err = runGitleaks(targetDir, scanID)
-			case "Checkov":
-				findings, err = runCheckov(targetDir, scanID)
-			}
-
-			scan.FinishedAt = time.Now()
-			scan.ScanStatus = "completed"
+			toolWg.Add(1)
 			
-			if err != nil {
-				scan.LogOutput = fmt.Sprintf("Error: %v", err)
-				fmt.Printf("Error\n")
-			} else {
-				scan.LogOutput = fmt.Sprintf("Findings: %d", len(findings))
-				if len(findings) > 0 {
-					fmt.Printf("%d Found\n", len(findings))
-					database.DB.CreateInBatches(findings, 100)
-				} else {
-					fmt.Printf("Clean\n")
+			// แยก 4 Tools รัน
+			go func(tName string) {
+				defer toolWg.Done()
+
+				scanID := uuid.New().String()
+				scan := models.Scan{
+					ScanID:     scanID,
+					CommitID:   dbCommit.CommitID,
+					ToolUsed:   tName,
+					ScanStatus: "running",
+					StartedAt:  time.Now(),
 				}
-			}
-			database.DB.Save(&scan)
+				database.DB.Create(&scan)
+
+				var findings []models.Finding
+				var err error
+
+				switch tName {
+				case "Semgrep":
+					findings, err = runSemgrep(targetDir, scanID)
+				case "Trivy":
+					findings, err = runTrivy(targetDir, scanID)
+				case "Gitleaks":
+					findings, err = runGitleaks(targetDir, scanID)
+				case "Checkov":
+					findings, err = runCheckov(targetDir, scanID)
+				}
+
+				scan.FinishedAt = time.Now()
+				scan.ScanStatus = "completed"
+
+				if err != nil {
+					scan.LogOutput = fmt.Sprintf("Error: %v", err)
+				} else {
+					scan.LogOutput = fmt.Sprintf("Findings: %d", len(findings))
+					if len(findings) > 0 {
+						database.DB.CreateInBatches(findings, 100)
+					}
+				}
+				database.DB.Save(&scan)
+			}(toolName)
 		}
+
+		// รอเครื่องมือสแกน4อันเสร็จก่อนคอมมิตต่อไป
+		toolWg.Wait()
+		fmt.Printf("completed for snapshot %s\n", commit.CommitHash[:7])
 	}
 
 	// Restore
