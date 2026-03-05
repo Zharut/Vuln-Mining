@@ -35,7 +35,6 @@ if err != nil {
 
 	log.Println("✅ Database Connected Successfully via GORM!")
 
-	// 🔥 เช็คตรงนี้ครับ ต้องมีครบ 5 ตัว! 🔥
 	log.Println("🔄 Running Auto Migrations...")
 	err = DB.AutoMigrate(
 		&models.Project{},             // 1. Projects
