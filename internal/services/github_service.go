@@ -7,6 +7,7 @@ import (
 	"os"
 	"vuln-scanner/internal/database"
 	"vuln-scanner/internal/models"
+	"time"
 )
 
 type GitHubSearchResponse struct {
@@ -64,11 +65,19 @@ func SearchRepositories(lang string, minStars int, maxStars int, targetNewCount 
 			return nil, err
 		}
 
-		if resp.StatusCode != 200 {
+		if resp.StatusCode == 403 {
+			fmt.Println("\nโควต้าเต็ม")
+			fmt.Println("รอ 60 วินาที เพื่อขอโควต้าใหม่")
 			resp.Body.Close()
-			return nil, fmt.Errorf("GitHub API Error: %s (Check rate limit or token)", resp.Status)
+			
+			time.Sleep(60 * time.Second)
+			continue
+			
+		} else if resp.StatusCode != 200 {
+			resp.Body.Close()
+			return nil, fmt.Errorf("GitHub API Error: %s", resp.Status)
 		}
-
+		
 		var result GitHubSearchResponse
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 			resp.Body.Close()
@@ -107,6 +116,9 @@ func SearchRepositories(lang string, minStars int, maxStars int, targetNewCount 
 		}
 
 		page++
+		if len(newProjects) < targetNewCount {
+			time.Sleep(2500 * time.Millisecond) 
+		}
 	}
 
 	return newProjects, nil
