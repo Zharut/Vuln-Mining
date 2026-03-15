@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { Link } from 'react-router-dom'
 import { ArrowLeft, Trophy, Search, X, ExternalLink, ShieldAlert, Loader2 } from 'lucide-react'
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, LabelList } from 'recharts'
 
 function DeepAnalytics() {
     //State Manage
@@ -253,6 +253,13 @@ function DeepAnalytics() {
                                     />
                                     <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', color: '#fff' }} />
                                     <Bar dataKey="count" radius={[0, 4, 4, 0]} barSize={20} cursor="pointer">
+                                        <LabelList
+                                            dataKey="count"
+                                            position="right"
+                                            fill="#D1D5DB"
+                                            fontSize={12}
+                                            fontWeight="bold"
+                                        />
                                         {sortedData.map((entry, index) => (
                                             <Cell key={`cell-${index}`} fill={reportMode === 'frequent' ? '#EF4444' : '#10B981'} />
                                         ))}
