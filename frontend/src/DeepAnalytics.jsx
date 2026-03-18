@@ -1,17 +1,17 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, Trophy, Search, X, ExternalLink, ShieldAlert, Loader2 } from 'lucide-react'
+import { ArrowLeft, Trophy, Search, X, ExternalLink, ShieldAlert, Loader2, Clock } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, LabelList } from 'recharts'
 
 function DeepAnalytics() {
     //State Manage
     const [languages, setLanguages] = useState([])
     const [selectedLang, setSelectedLang] = useState('')
-    const [reportMode, setReportMode] = useState('frequent') // 'frequent' | 'fixed'
+    const [reportMode, setReportMode] = useState('frequent')
     const [data, setData] = useState([])
     const [loading, setLoading] = useState(false)
-    const [sortOrder, setSortOrder] = useState('desc') // 'desc' | 'asc'
+    const [sortOrder, setSortOrder] = useState('desc')
 
     //Modal
     const [modalOpen, setModalOpen] = useState(false)
@@ -38,9 +38,28 @@ function DeepAnalytics() {
     useEffect(() => {
         if (!selectedLang) return
         setLoading(true)
-        axios.get(`http://localhost:8081/api/report/vulnerabilities?lang=${selectedLang}&mode=${reportMode}`)
+
+        let url = `http://localhost:8081/api/report/vulnerabilities?lang=${selectedLang}&mode=${reportMode}`
+
+        // ถ้าเป็นโหมด MTTR ให้เปลี่ยนไปเรียก API ตัวใหม่
+        if (reportMode === 'mttr') {
+            url = `http://localhost:8081/api/report/mttr`
+        }
+
+        axios.get(url)
             .then(res => {
-                setData(res.data || [])
+                let resultData = res.data || []
+
+                // แปลงข้อมูล MTTR ให้เข้ากับกราฟแท่งเดิม
+                if (reportMode === 'mttr') {
+                    resultData = resultData.filter(item => item.language === selectedLang || (selectedLang === 'Misc' && item.language === 'Misc'))
+                    resultData = resultData.map(item => ({
+                        name: item.vulnerability_id,
+                        count: parseFloat(item.avg_days_to_fix.toFixed(1)) // ใช้ count แทนเพื่อไม่ให้กราฟพัง
+                    }))
+                }
+
+                setData(resultData)
                 setLoading(false)
             })
             .catch(err => {
@@ -167,6 +186,12 @@ function DeepAnalytics() {
         }
     }
 
+    const getBarColor = () => {
+        if (reportMode === 'frequent') return '#EF4444'; // แดง
+        if (reportMode === 'mttr') return '#F59E0B';     // ส้มเหลือง
+        return '#10B981';                                // เขียว
+    }
+
     return (
         <div className="p-8 max-w-7xl mx-auto min-h-screen bg-gray-950 text-gray-100 font-sans relative">
 
@@ -178,7 +203,9 @@ function DeepAnalytics() {
                 <h1 className="text-4xl font-bold text-white mb-2 flex items-center gap-3">
                     Full Spectrum Analysis
                 </h1>
-                <p className="text-gray-400 text-lg">Click on bar to see real-time Summary.</p>
+                <p className="text-gray-400 text-lg">
+                    {reportMode === 'mttr' ? 'Analyzing Average Days to Remediate (MTTR)' : 'Click on bar to see real-time Summary.'}
+                </p>
             </div>
 
             {/* --- Controls Bar --- */}
@@ -204,6 +231,10 @@ function DeepAnalytics() {
                     <div className="flex bg-gray-950 p-1 rounded-xl border border-gray-800">
                         <button onClick={() => setReportMode('frequent')} className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${reportMode === 'frequent' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}>Frequent</button>
                         <button onClick={() => setReportMode('fixed')} className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${reportMode === 'fixed' ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>Fixed</button>
+                        {/* 🔥 ปุ่ม MTTR */}
+                        <button onClick={() => setReportMode('mttr')} className={`flex items-center gap-1 px-4 py-2 rounded-lg font-bold text-sm transition-all ${reportMode === 'mttr' ? 'bg-yellow-600 text-white' : 'text-gray-400 hover:text-white'}`}>
+                            <Clock size={16} /> MTTR
+                        </button>
                     </div>
                 </div>
 
@@ -251,7 +282,11 @@ function DeepAnalytics() {
                                         interval={0}
                                         onClick={(data) => handleVulnClick(data.value)}
                                     />
-                                    <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', color: '#fff' }} />
+                                    <Tooltip
+                                        cursor={{ fill: 'rgba(255,255,255,0.05)' }}
+                                        contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', color: '#fff' }}
+                                        formatter={(value) => reportMode === 'mttr' ? [`${value} Days`, 'Avg Time to Fix'] : [value, 'Occurrences']}
+                                    />
                                     <Bar dataKey="count" radius={[0, 4, 4, 0]} barSize={20} cursor="pointer">
                                         <LabelList
                                             dataKey="count"
@@ -259,9 +294,10 @@ function DeepAnalytics() {
                                             fill="#D1D5DB"
                                             fontSize={12}
                                             fontWeight="bold"
+                                            formatter={(value) => reportMode === 'mttr' ? `${value} Days` : value}
                                         />
                                         {sortedData.map((entry, index) => (
-                                            <Cell key={`cell-${index}`} fill={reportMode === 'frequent' ? '#EF4444' : '#10B981'} />
+                                            <Cell key={`cell-${index}`} fill={getBarColor()} />
                                         ))}
                                     </Bar>
                                 </BarChart>

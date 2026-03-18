@@ -30,7 +30,7 @@ func StartServer() {
 		c.JSON(200, gin.H{"total_projects": projectCount, "total_vulns": vulnCount})
 	})
 
-r.GET("/api/options/languages", func(c *gin.Context) {
+	r.GET("/api/options/languages", func(c *gin.Context) {
 		var rawLangs []string
 		
 		database.DB.Model(&models.Project{}).
@@ -177,7 +177,7 @@ r.GET("/api/options/languages", func(c *gin.Context) {
 		c.JSON(200, trends)
 	})
 
-r.GET("/api/report/vulnerabilities", func(c *gin.Context) {
+	r.GET("/api/report/vulnerabilities", func(c *gin.Context) {
 		lang := c.Query("lang")
 		mode := c.Query("mode")
 
@@ -270,6 +270,55 @@ r.GET("/api/report/vulnerabilities", func(c *gin.Context) {
 				Scan(&results)
 		}
 
+		c.JSON(200, results)
+	})
+
+	// MTTR
+	r.GET("/api/report/mttr", func(c *gin.Context) {
+		type MTTRResult struct {
+			Language     string  `json:"language"`
+			VulnID       string  `json:"vulnerability_id"`
+			AvgDaysToFix float64 `json:"avg_days_to_fix"`
+		}
+		var results []MTTRResult
+
+		sql := `
+			WITH VulnLifespan AS (
+				SELECT 
+					p.language, 
+					f.vulnerability_id, 
+					p.project_id,
+					MIN(c.committed_at) as first_seen,
+					MAX(c.committed_at) as last_seen
+				FROM findings f
+				JOIN scans s ON f.scan_id = s.scan_id
+				JOIN commits c ON s.commit_id = c.commit_id
+				JOIN projects p ON c.project_id = p.project_id
+				GROUP BY p.language, f.vulnerability_id, p.project_id
+			),
+			CurrentVulns AS (
+				SELECT DISTINCT p.project_id, f.vulnerability_id
+				FROM findings f
+				JOIN scans s ON f.scan_id = s.scan_id
+				JOIN commits c ON s.commit_id = c.commit_id
+				JOIN projects p ON c.project_id = p.project_id
+				WHERE c.committed_at = (SELECT MAX(committed_at) FROM commits WHERE project_id = p.project_id)
+			)
+			SELECT 
+				COALESCE(vl.language, 'Misc') as language,
+				vl.vulnerability_id,
+				AVG(EXTRACT(EPOCH FROM (vl.last_seen - vl.first_seen))/86400) as avg_days_to_fix
+			FROM VulnLifespan vl
+			LEFT JOIN CurrentVulns cv 
+				ON vl.project_id = cv.project_id AND vl.vulnerability_id = cv.vulnerability_id
+			WHERE cv.project_id IS NULL 
+			  AND vl.last_seen > vl.first_seen 
+			GROUP BY vl.language, vl.vulnerability_id
+			ORDER BY avg_days_to_fix DESC
+			LIMIT 50;
+		`
+
+		database.DB.Raw(sql).Scan(&results)
 		c.JSON(200, results)
 	})
 
