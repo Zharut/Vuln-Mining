@@ -86,7 +86,6 @@ func saveVulnDetail(id, title, desc, remediation string, score float64, refs []s
 		ReferencesJSON:  string(refJson),
 	}
 
-	// Upsert ลง DB
 	database.DB.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "vulnerability_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"title", "description", "remediation", "references_json"}),
@@ -129,7 +128,9 @@ func runSemgrep(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
 	outFile := filepath.Join(repoPath, "semgrep.json")
 	
-	err := exec.Command("semgrep", "scan", "--config=auto", "--json", "--output="+outFile, ".").Run()
+	cmd := exec.Command("semgrep", "scan", "--config=auto", "--json", "--output="+outFile, ".")
+	cmd.Dir = repoPath 
+	err := cmd.Run()
 	if err != nil && !strings.Contains(err.Error(), "exit status 1") {}
 
 	if data, err := os.ReadFile(outFile); err == nil {
@@ -139,7 +140,6 @@ func runSemgrep(repoPath string, scanID string) ([]models.Finding, error) {
 			cwe := "UNKNOWN"
 			if len(r.Extra.Metadata.CWE) > 0 { cwe = strings.Split(r.Extra.Metadata.CWE[0], ":")[0] }
 			
-			// Auto-Save Detail
 			sevScore := 5.0
 			if strings.ToUpper(r.Extra.Severity) == "ERROR" { sevScore = 8.0 }
 			saveVulnDetail(r.CheckID, r.Extra.Message, r.Extra.Message, "Review and fix code logic.", sevScore, []string{})
@@ -158,7 +158,9 @@ func runTrivy(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
 	outFile := filepath.Join(repoPath, "trivy.json")
 
-	if err := exec.Command("trivy", "fs", ".", "--format", "json", "--output", outFile).Run(); err != nil {
+	cmd := exec.Command("trivy", "fs", ".", "--format", "json", "--output", outFile, "--skip-db-update")
+	cmd.Dir = repoPath
+	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 
@@ -170,7 +172,6 @@ func runTrivy(repoPath string, scanID string) ([]models.Finding, error) {
 				cwe := "UNKNOWN"
 				if len(v.CweIDs) > 0 { cwe = v.CweIDs[0] }
 				
-				// Auto-Save Detail
 				remediation := fmt.Sprintf("Upgrade %s to version %s", v.PkgName, v.FixedVersion)
 				saveVulnDetail(v.VulnerabilityID, v.Title, v.Description, remediation, 7.0, v.References)
 
@@ -190,13 +191,14 @@ func runGitleaks(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
 	outFile := filepath.Join(repoPath, "gitleaks.json")
 
-	exec.Command("gitleaks", "detect", "--source", ".", "--report-path", outFile, "--no-git").Run()
+	cmd := exec.Command("gitleaks", "detect", "--source", ".", "--report-path", outFile, "--no-git")
+	cmd.Dir = repoPath
+	cmd.Run()
 
 	if data, err := os.ReadFile(outFile); err == nil {
 		var out []GitleaksResult
 		json.Unmarshal(data, &out)
 		for _, r := range out {
-			// Auto-Save Detail
 			saveVulnDetail(r.RuleID, r.Description, "Secret detected by Gitleaks. Hardcoded secrets pose a severe security risk.", "Revoke this secret immediately and rotate credentials.", 9.0, []string{"https://github.com/zricethezav/gitleaks"})
 
 			secretSnippet := r.Secret
@@ -229,7 +231,6 @@ func runCheckov(repoPath string, scanID string) ([]models.Finding, error) {
 			for _, runner := range out {
 				for _, r := range runner.Results.FailedChecks {
 					
-					// Auto-Save Detail
 					saveVulnDetail(r.CheckID, r.CheckName, r.CheckName, "Refer to guideline: "+r.Guideline, 6.0, []string{r.Guideline})
 
 					line := 0
@@ -256,7 +257,7 @@ func ProcessRepositoryHistory(project models.Project) {
 		os.RemoveAll(targetDir)
 	}()
 
-	// Clone/Pull
+	// Pull
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
 		fmt.Printf("⬇ Cloning %s...\n", project.RepoURL)
 		if err := exec.Command("git", "clone", project.RepoURL, targetDir).Run(); err != nil {
@@ -294,7 +295,7 @@ func ProcessRepositoryHistory(project models.Project) {
 
 	fmt.Printf("Scanning %d snapshots with 4 Engines...\n", len(selectedCommits))
 
-	// Loop Commits
+	// Commits
 	for i, commit := range selectedCommits {
 		fmt.Printf("\n[%d/%d] Snapshot: %s\n", i+1, len(selectedCommits), commit.CommitHash[:7])
 
@@ -318,7 +319,7 @@ func ProcessRepositoryHistory(project models.Project) {
 		for _, toolName := range toolList {
 			toolWg.Add(1)
 			
-			// แยก 4 Tools รัน
+			// แยกรันพร้อมกัน
 			go func(tName string) {
 				defer toolWg.Done()
 
@@ -361,11 +362,10 @@ func ProcessRepositoryHistory(project models.Project) {
 			}(toolName)
 		}
 
-		// รอเครื่องมือสแกน4อันเสร็จก่อนคอมมิตต่อไป
+		// รอเครื่องมือสแกน 4 อันเสร็จ เปลี่ยน Commit
 		toolWg.Wait()
-		fmt.Printf("completed for snapshot %s\n", commit.CommitHash[:7])
+		fmt.Printf("    4 Engines completed for snapshot %s\n", commit.CommitHash[:7])
 	}
 
-	// Restore
 	exec.Command("git", "-C", targetDir, "checkout", "main").Run()
 }

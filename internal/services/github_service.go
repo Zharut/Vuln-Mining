@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"time"
 	"vuln-scanner/internal/database"
 	"vuln-scanner/internal/models"
-	"time"
 )
 
 type GitHubSearchResponse struct {
@@ -25,100 +25,149 @@ type GitHubSearchResponse struct {
 }
 
 func SearchRepositories(lang string, minStars int, maxStars int, targetNewCount int) ([]models.Project, error) {
-	// 1. สร้าง Query String
-	starQuery := fmt.Sprintf(">=%d", minStars)
-	if maxStars > 0 {
-		starQuery = fmt.Sprintf("%d..%d", minStars, maxStars)
-	}
-
-	query := fmt.Sprintf("stars:%s", starQuery)
-	if lang != "" {
-		query += fmt.Sprintf(" language:%s", lang)
-	}
-
 	var newProjects []models.Project
-	page := 1
-	perPage := 100
+	currentMaxStars := maxStars
 
-	fmt.Printf("📡 GitHub Query: %s (Target NEW: %d repos)\n", query, targetNewCount)
-
-	// 2. ลูปดึงข้อมูลจนกว่าจะได้ครบ
+	// สไลด์ช่วงดาวไปเรื่อยๆ จนกว่าจะครบ
 	for len(newProjects) < targetNewCount {
-		url := fmt.Sprintf("https://api.github.com/search/repositories?q=%s&sort=stars&order=desc&per_page=%d&page=%d", query, perPage, page)
-		
-		req, err := http.NewRequest("GET", url, nil)
-		if err != nil {
-			return nil, err
+
+		// สร้าง Query String สำหรับรอบนี้
+		starQuery := fmt.Sprintf(">=%d", minStars)
+		if currentMaxStars > 0 {
+			starQuery = fmt.Sprintf("%d..%d", minStars, currentMaxStars)
 		}
 
-		req.Header.Set("Accept", "application/vnd.github.v3+json")
-		req.Header.Set("User-Agent", "Vuln-Scanner-App")
-		
-		token := os.Getenv("GITHUB_TOKEN")
-		if token != "" {
-			req.Header.Set("Authorization", "Bearer "+token)
+		query := fmt.Sprintf("stars:%s", starQuery)
+		if lang != "" {
+			query += fmt.Sprintf(" language:%s", lang)
 		}
 
-		client := &http.Client{}
-		resp, err := client.Do(req)
-		if err != nil {
-			return nil, err
-		}
+		page := 1
+		perPage := 100
+		var lastStarCount float64 = -1
+		gotItemsInThisQuery := false
 
-		if resp.StatusCode == 403 {
-			fmt.Println("\nโควต้าเต็ม")
-			fmt.Println("รอ 60 วินาที เพื่อขอโควต้าใหม่")
+		fmt.Printf("\n📡 GitHub Query: %s (Target NEW: %d repos)\n", query, targetNewCount)
+
+		// ดึงทีละหน้า (หน้าละ 100) จนกว่าจะชนลิมิต 1,000
+		for {
+			url := fmt.Sprintf("https://api.github.com/search/repositories?q=%s&sort=stars&order=desc&per_page=%d&page=%d", query, perPage, page)
+
+			req, err := http.NewRequest("GET", url, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			req.Header.Set("Accept", "application/vnd.github.v3+json")
+			req.Header.Set("User-Agent", "Vuln-Scanner-App")
+
+			token := os.Getenv("GITHUB_TOKEN")
+			if token != "" {
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
+
+			client := &http.Client{}
+			resp, err := client.Do(req)
+			if err != nil {
+				return nil, err
+			}
+
+			// ดักจับ Rate Limit 403 (พัก 60 วินาที)
+			if resp.StatusCode == 403 {
+				fmt.Println("\nโควต้า GitHub API เต็ม!")
+				fmt.Println("หลับ 60 วินาที")
+				resp.Body.Close()
+				time.Sleep(60 * time.Second)
+				continue // วนกลับไปยิง API ดึงหน้าเดิมซ้ำ
+			} else if resp.StatusCode == 422 {
+				// ดักจับ 422
+				fmt.Printf("\nครบ 1000 ตัวของช่วงนี้ (หน้า %d)\n", page)
+				resp.Body.Close()
+				break // สั่งหยุดลูปหน้าเพจ เพื่อไปสไลด์ลดเพดานดาวในลูปชั้นนอก
+			} else if resp.StatusCode != 200 {
+				resp.Body.Close()
+				return nil, fmt.Errorf("GitHub API Error: %s", resp.Status)
+			}
+
+			var result GitHubSearchResponse
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+				resp.Body.Close()
+				return nil, err
+			}
 			resp.Body.Close()
-			
-			time.Sleep(60 * time.Second)
-			continue
-			
-		} else if resp.StatusCode != 200 {
-			resp.Body.Close()
-			return nil, fmt.Errorf("GitHub API Error: %s", resp.Status)
-		}
-		
-		var result GitHubSearchResponse
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			resp.Body.Close()
-			return nil, err
-		}
-		resp.Body.Close()
 
-		if len(result.Items) == 0 {
-			break // API หมดสต๊อก หาเพิ่มไม่ได้
-		}
+			if len(result.Items) == 0 {
+				break // GitHub สำหรับช่วงดาวนี้แล้วหมด
+			}
 
-		fmt.Printf("   📥 Fetched page %d (%d items). Filtering existing...\n", page, len(result.Items))
+			gotItemsInThisQuery = true
+			fmt.Printf("   📥 Fetched page %d (%d items). Filtering existing...\n", page, len(result.Items))
 
-		// 3. ตรวจสอบว่ามีใน DB หรือยัง
-		for _, item := range result.Items {
-			var count int64
-			database.DB.Model(&models.Project{}).Where("repo_url = ?", item.HTMLURL).Count(&count)
+			// ตรวจสอบว่ามีใน DB หรือยัง
+			for _, item := range result.Items {
+				// จำดาวของโปรเจกต์ล่าสุด
+				lastStarCount = item.StargazersCount 
 
-			// ถ้า count = 0 แปลว่าไม่เคยมีใน DB มาก่อน
-			if count == 0 {
-				newProjects = append(newProjects, models.Project{
-					ProjectID: fmt.Sprintf("%d", item.ID),
-					RepoName:  item.Name,
-					Owner:     item.Owner.Login,
-					RepoURL:   item.HTMLURL,
-					Stars:     item.StargazersCount,
-					Language:  item.Language,
-					Status:    "active",
-				})
+				var count int64
+				database.DB.Model(&models.Project{}).Where("repo_url = ?", item.HTMLURL).Count(&count)
 
-				// ครบเป้าหมาย หยุด
-				if len(newProjects) >= targetNewCount {
-					break
+				if count == 0 {
+					newProjects = append(newProjects, models.Project{
+						ProjectID: fmt.Sprintf("%d", item.ID),
+						RepoName:  item.Name,
+						Owner:     item.Owner.Login,
+						RepoURL:   item.HTMLURL,
+						Stars:     item.StargazersCount,
+						Language:  item.Language,
+						Status:    "active",
+					})
+
+					if len(newProjects) >= targetNewCount {
+						break // ได้ครบเป้าหมายแล้ว
+					}
 				}
 			}
+
+			if len(newProjects) >= targetNewCount {
+				break
+			}
+
+			page++
+			time.Sleep(2500 * time.Millisecond) // หน่วงเวลากันโดนแบน
 		}
 
-		page++
-		if len(newProjects) < targetNewCount {
-			time.Sleep(2500 * time.Millisecond) 
+		// ถ้าได้ครบตามจำนวนเป้าหมายแล้ว
+		if len(newProjects) >= targetNewCount {
+			break
 		}
+
+		// ถ้าไม่เจออะไรเลย = หมดของทั้งระบบ GitHub แล้ว
+		if !gotItemsInThisQuery {
+			fmt.Println("\nหมดGitHub สำหรับภาษานี้")
+			break
+		}
+
+		//  หาช่วงต่อไป!
+		if lastStarCount != -1 {
+			nextMax := int(lastStarCount)
+			
+			// ถ้าเพดานดาวชนกับขั้นต่ำแล้ว
+			if nextMax < minStars {
+				fmt.Println("\nสุดขอบเขต Min Stars")
+				break
+			}
+
+			// กันกรณีมีโปรเจกต์ดาว ... เป๊ะๆ เกินพัน
+			if currentMaxStars > 0 && nextMax >= currentMaxStars {
+				nextMax = currentMaxStars - 1
+			}
+			
+			currentMaxStars = nextMax
+			fmt.Printf("🔄 เลื่อนเพดานดาวลงมาหาต่อที่: Max %d Stars\n", currentMaxStars)
+		} else {
+			break
+		}
+
 	}
 
 	return newProjects, nil
