@@ -126,14 +126,17 @@ func GetAllCommits(repoPath string) ([]models.Commit, error) {
 
 func runSemgrep(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
-	outFile := filepath.Join(repoPath, "semgrep.json")
 	
-	cmd := exec.Command("semgrep", "scan", "--config=auto", "--json", "--output="+outFile, ".")
+	// ไฟล์ที่ Go จะอ่าน (ต้องเป็น Path เต็ม)
+	outFileForGo := filepath.Join(repoPath, "semgrep.json")
+	
+	// ไฟล์ที่ Tool จะเขียน (เพราะ Tool ทำงานใน repoPath อยู่แล้ว เลยใช้แค่ชื่อไฟล์)
+	cmd := exec.Command("semgrep", "scan", "--config=auto", "--json", "--output=semgrep.json", ".")
 	cmd.Dir = repoPath 
 	err := cmd.Run()
 	if err != nil && !strings.Contains(err.Error(), "exit status 1") {}
 
-	if data, err := os.ReadFile(outFile); err == nil {
+	if data, err := os.ReadFile(outFileForGo); err == nil {
 		var out SemgrepOutput
 		json.Unmarshal(data, &out)
 		for _, r := range out.Results {
@@ -156,15 +159,18 @@ func runSemgrep(repoPath string, scanID string) ([]models.Finding, error) {
 
 func runTrivy(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
-	outFile := filepath.Join(repoPath, "trivy.json")
+	
+	// ไฟล์ที่ Go จะอ่าน
+	outFileForGo := filepath.Join(repoPath, "trivy.json")
 
-	cmd := exec.Command("trivy", "fs", ".", "--format", "json", "--output", outFile, "--skip-db-update")
+	// สั่งรัน Trivy ให้ออกไฟล์ชื่อ trivy.json (เพราะมันรันในโฟลเดอร์อยู่แล้ว)
+	cmd := exec.Command("trivy", "fs", ".", "--format", "json", "--output", "trivy.json", "--skip-db-update")
 	cmd.Dir = repoPath
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
 
-	if data, err := os.ReadFile(outFile); err == nil {
+	if data, err := os.ReadFile(outFileForGo); err == nil {
 		var out TrivyOutput
 		json.Unmarshal(data, &out)
 		for _, res := range out.Results {
@@ -189,13 +195,16 @@ func runTrivy(repoPath string, scanID string) ([]models.Finding, error) {
 
 func runGitleaks(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
-	outFile := filepath.Join(repoPath, "gitleaks.json")
+	
+	// ไฟล์ที่ Go จะอ่าน
+	outFileForGo := filepath.Join(repoPath, "gitleaks.json")
 
-	cmd := exec.Command("gitleaks", "detect", "--source", ".", "--report-path", outFile, "--no-git")
+	// สั่งรัน Gitleaks ให้ออกไฟล์ชื่อ gitleaks.json
+	cmd := exec.Command("gitleaks", "detect", "--source", ".", "--report-path", "gitleaks.json", "--no-git")
 	cmd.Dir = repoPath
 	cmd.Run()
 
-	if data, err := os.ReadFile(outFile); err == nil {
+	if data, err := os.ReadFile(outFileForGo); err == nil {
 		var out []GitleaksResult
 		json.Unmarshal(data, &out)
 		for _, r := range out {
@@ -216,6 +225,8 @@ func runGitleaks(repoPath string, scanID string) ([]models.Finding, error) {
 
 func runCheckov(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
+	
+	// อันนี้สร้างด้วย Go เลยต้องใช้ Path เต็ม
 	outFile := filepath.Join(repoPath, "checkov.json")
 
 	cmd := exec.Command("checkov", "-d", ".", "--output", "json", "--output-file-path", ".")
@@ -257,7 +268,7 @@ func ProcessRepositoryHistory(project models.Project) {
 		os.RemoveAll(targetDir)
 	}()
 
-	// Pull
+	// Clone/Pull
 	if _, err := os.Stat(targetDir); os.IsNotExist(err) {
 		fmt.Printf("⬇ Cloning %s...\n", project.RepoURL)
 		if err := exec.Command("git", "clone", project.RepoURL, targetDir).Run(); err != nil {
@@ -295,14 +306,14 @@ func ProcessRepositoryHistory(project models.Project) {
 
 	fmt.Printf("Scanning %d snapshots with 4 Engines...\n", len(selectedCommits))
 
-	// Commits
+	// Loop Commits
 	for i, commit := range selectedCommits {
 		fmt.Printf("\n[%d/%d] Snapshot: %s\n", i+1, len(selectedCommits), commit.CommitHash[:7])
 
 		// Checkout
 		exec.Command("git", "-C", targetDir, "checkout", "-f", commit.CommitHash).Run()
 
-		// Save
+		// Save Commit
 		commit.ProjectID = project.ProjectID
 		database.DB.Clauses(clause.OnConflict{
 			Columns:   []clause.Column{{Name: "commit_hash"}},
@@ -314,12 +325,12 @@ func ProcessRepositoryHistory(project models.Project) {
 
 		toolList := []string{"Semgrep", "Trivy", "Gitleaks", "Checkov"}
 		
-		var toolWg sync.WaitGroup // คุมคิว
+		var toolWg sync.WaitGroup // คุมคิวเครื่องมือทั้ง 4 ตัว
 
 		for _, toolName := range toolList {
 			toolWg.Add(1)
 			
-			// แยกรันพร้อมกัน
+			// แยก 4 Tools รันพร้อมกัน
 			go func(tName string) {
 				defer toolWg.Done()
 
@@ -362,10 +373,11 @@ func ProcessRepositoryHistory(project models.Project) {
 			}(toolName)
 		}
 
-		// รอเครื่องมือสแกน 4 อันเสร็จ เปลี่ยน Commit
+		// รอเครื่องมือสแกน 4 อันเสร็จก่อนเปลี่ยน Commit
 		toolWg.Wait()
 		fmt.Printf("    4 Engines completed for snapshot %s\n", commit.CommitHash[:7])
 	}
 
+	// Restore กลับเป็น main
 	exec.Command("git", "-C", targetDir, "checkout", "main").Run()
 }
