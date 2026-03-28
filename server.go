@@ -189,7 +189,6 @@ func StartServer() {
 
 		if mode == "fixed" {
 			if lang == "Misc" {
-				// กรณีเป็น ไม่มีภาษา
 				sql := `
 					WITH AllFindings AS (
 						SELECT p.project_id, f.vulnerability_id
@@ -219,7 +218,6 @@ func StartServer() {
 				`
 				database.DB.Raw(sql).Scan(&results)
 			} else {
-				// ภาษาปกติ
 				sql := `
 					WITH AllFindings AS (
 						SELECT p.project_id, f.vulnerability_id
@@ -251,14 +249,12 @@ func StartServer() {
 			}
 
 		} else {
-			// Frequent (ใช้ GORM)
 			query := database.DB.Table("findings").
 				Select("findings.vulnerability_id as name, COUNT(*) as count").
 				Joins("JOIN scans ON findings.scan_id = scans.scan_id").
 				Joins("JOIN commits ON scans.commit_id = commits.commit_id").
 				Joins("JOIN projects ON commits.project_id = projects.project_id")
 
-			// กรองตามภาษา
 			if lang == "Misc" {
 				query = query.Where("projects.language = ? OR projects.language IS NULL", "")
 			} else if lang != "" && lang != "All" {
@@ -273,8 +269,13 @@ func StartServer() {
 		c.JSON(200, results)
 	})
 
-	// MTTR
+	// MTTR Analytics
 	r.GET("/api/report/mttr", func(c *gin.Context) {
+		lang := c.Query("lang")
+		if lang == "" {
+			lang = "Misc"
+		}
+
 		type MTTRResult struct {
 			Language     string  `json:"language"`
 			VulnID       string  `json:"vulnerability_id"`
@@ -282,43 +283,91 @@ func StartServer() {
 		}
 		var results []MTTRResult
 
-		sql := `
-			WITH VulnLifespan AS (
-				SELECT 
-					p.language, 
-					f.vulnerability_id, 
-					p.project_id,
-					MIN(c.committed_at) as first_seen,
-					MAX(c.committed_at) as last_seen
-				FROM findings f
-				JOIN scans s ON f.scan_id = s.scan_id
-				JOIN commits c ON s.commit_id = c.commit_id
-				JOIN projects p ON c.project_id = p.project_id
-				GROUP BY p.language, f.vulnerability_id, p.project_id
-			),
-			CurrentVulns AS (
-				SELECT DISTINCT p.project_id, f.vulnerability_id
-				FROM findings f
-				JOIN scans s ON f.scan_id = s.scan_id
-				JOIN commits c ON s.commit_id = c.commit_id
-				JOIN projects p ON c.project_id = p.project_id
-				WHERE c.committed_at = (SELECT MAX(committed_at) FROM commits WHERE project_id = p.project_id)
-			)
-			SELECT 
-				COALESCE(vl.language, 'Misc') as language,
-				vl.vulnerability_id,
-				AVG(EXTRACT(EPOCH FROM (vl.last_seen - vl.first_seen))/86400) as avg_days_to_fix
-			FROM VulnLifespan vl
-			LEFT JOIN CurrentVulns cv 
-				ON vl.project_id = cv.project_id AND vl.vulnerability_id = cv.vulnerability_id
-			WHERE cv.project_id IS NULL 
-			  AND vl.last_seen > vl.first_seen 
-			GROUP BY vl.language, vl.vulnerability_id
-			ORDER BY avg_days_to_fix DESC
-			LIMIT 50;
-		`
+		var sql string
+		var args []interface{}
 
-		database.DB.Raw(sql).Scan(&results)
+		if lang == "Misc" {
+			sql = `
+				WITH ProjectLatestCommit AS (
+					SELECT project_id, MAX(committed_at) as latest_commit_time
+					FROM commits
+					GROUP BY project_id
+				),
+				VulnLifespan AS (
+					SELECT 
+						p.language, 
+						f.vulnerability_id, 
+						p.project_id,
+						MIN(c.committed_at) as first_seen,
+						MAX(c.committed_at) as last_seen
+					FROM findings f
+					JOIN scans s ON f.scan_id = s.scan_id
+					JOIN commits c ON s.commit_id = c.commit_id
+					JOIN projects p ON c.project_id = p.project_id
+					WHERE (p.language = '' OR p.language IS NULL)
+					GROUP BY p.language, f.vulnerability_id, p.project_id
+				),
+				FixedVulns AS (
+					SELECT 
+						vl.language,
+						vl.vulnerability_id,
+						GREATEST(EXTRACT(EPOCH FROM (vl.last_seen - vl.first_seen))/86400.0, 1.0) AS days_survived
+					FROM VulnLifespan vl
+					JOIN ProjectLatestCommit plc ON vl.project_id = plc.project_id
+					WHERE vl.last_seen < plc.latest_commit_time
+				)
+				SELECT 
+					COALESCE(language, 'Misc') as language,
+					vulnerability_id,
+					AVG(days_survived) as avg_days_to_fix
+				FROM FixedVulns
+				GROUP BY language, vulnerability_id
+				ORDER BY avg_days_to_fix DESC
+				LIMIT 50;
+			`
+		} else {
+			sql = `
+				WITH ProjectLatestCommit AS (
+					SELECT project_id, MAX(committed_at) as latest_commit_time
+					FROM commits
+					GROUP BY project_id
+				),
+				VulnLifespan AS (
+					SELECT 
+						p.language, 
+						f.vulnerability_id, 
+						p.project_id,
+						MIN(c.committed_at) as first_seen,
+						MAX(c.committed_at) as last_seen
+					FROM findings f
+					JOIN scans s ON f.scan_id = s.scan_id
+					JOIN commits c ON s.commit_id = c.commit_id
+					JOIN projects p ON c.project_id = p.project_id
+					WHERE p.language = ?
+					GROUP BY p.language, f.vulnerability_id, p.project_id
+				),
+				FixedVulns AS (
+					SELECT 
+						vl.language,
+						vl.vulnerability_id,
+						GREATEST(EXTRACT(EPOCH FROM (vl.last_seen - vl.first_seen))/86400.0, 1.0) AS days_survived
+					FROM VulnLifespan vl
+					JOIN ProjectLatestCommit plc ON vl.project_id = plc.project_id
+					WHERE vl.last_seen < plc.latest_commit_time
+				)
+				SELECT 
+					COALESCE(language, 'Misc') as language,
+					vulnerability_id,
+					AVG(days_survived) as avg_days_to_fix
+				FROM FixedVulns
+				GROUP BY language, vulnerability_id
+				ORDER BY avg_days_to_fix DESC
+				LIMIT 50;
+			`
+			args = append(args, lang)
+		}
+
+		database.DB.Raw(sql, args...).Scan(&results)
 		c.JSON(200, results)
 	})
 

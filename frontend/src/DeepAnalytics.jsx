@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import axios from 'axios'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, Trophy, Search, X, ExternalLink, ShieldAlert, Loader2, Clock } from 'lucide-react'
+import { ArrowLeft, Search, X, ExternalLink, ShieldAlert, Loader2, Clock } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, CartesianGrid, LabelList } from 'recharts'
 
 function DeepAnalytics() {
@@ -41,9 +41,9 @@ function DeepAnalytics() {
 
         let url = `http://localhost:8081/api/report/vulnerabilities?lang=${selectedLang}&mode=${reportMode}`
 
-        // ถ้าเป็นโหมด MTTR ให้เปลี่ยนไปเรียก API ตัวใหม่
+        // 🔥 แก้ไขแล้ว: เพิ่มพารามิเตอร์ ?lang= ให้กับ API โหมด MTTR
         if (reportMode === 'mttr') {
-            url = `http://localhost:8081/api/report/mttr`
+            url = `http://localhost:8081/api/report/mttr?lang=${selectedLang}`
         }
 
         axios.get(url)
@@ -54,8 +54,9 @@ function DeepAnalytics() {
                 if (reportMode === 'mttr') {
                     resultData = resultData.filter(item => item.language === selectedLang || (selectedLang === 'Misc' && item.language === 'Misc'))
                     resultData = resultData.map(item => ({
-                        name: item.vulnerability_id,
-                        count: parseFloat(item.avg_days_to_fix.toFixed(1)) // ใช้ count แทนเพื่อไม่ให้กราฟพัง
+                        // ดักชื่อตัวแปรครอบคลุมทุกแบบที่ API อาจจะส่งมา
+                        name: item.vulnerability_id || item.name || item.vuln_id || item.id || 'Unknown Vuln',
+                        count: parseFloat((item.avg_days_to_fix || 0).toFixed(1))
                     }))
                 }
 
@@ -231,7 +232,6 @@ function DeepAnalytics() {
                     <div className="flex bg-gray-950 p-1 rounded-xl border border-gray-800">
                         <button onClick={() => setReportMode('frequent')} className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${reportMode === 'frequent' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}>Frequent</button>
                         <button onClick={() => setReportMode('fixed')} className={`px-4 py-2 rounded-lg font-bold text-sm transition-all ${reportMode === 'fixed' ? 'bg-green-600 text-white' : 'text-gray-400 hover:text-white'}`}>Fixed</button>
-                        {/* 🔥 ปุ่ม MTTR */}
                         <button onClick={() => setReportMode('mttr')} className={`flex items-center gap-1 px-4 py-2 rounded-lg font-bold text-sm transition-all ${reportMode === 'mttr' ? 'bg-yellow-600 text-white' : 'text-gray-400 hover:text-white'}`}>
                             <Clock size={16} /> MTTR
                         </button>
@@ -276,9 +276,9 @@ function DeepAnalytics() {
                                     <YAxis
                                         dataKey="name"
                                         type="category"
-                                        width={220}
+                                        width={350}
                                         stroke="#E5E7EB"
-                                        tick={{ fontSize: 12, fontWeight: '500', cursor: 'pointer' }}
+                                        tick={{ fontSize: 12, fontWeight: '500', fill: '#E5E7EB', cursor: 'pointer' }}
                                         interval={0}
                                         onClick={(data) => handleVulnClick(data.value)}
                                     />
