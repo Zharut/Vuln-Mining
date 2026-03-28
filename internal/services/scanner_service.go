@@ -126,11 +126,11 @@ func GetAllCommits(repoPath string) ([]models.Commit, error) {
 
 func runSemgrep(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
-	
-	// ไฟล์ที่ Go จะอ่าน (ต้องเป็น Path เต็ม)
+
+	// ไฟล์ที่ Go จะอ่าน
 	outFileForGo := filepath.Join(repoPath, "semgrep.json")
 	
-	// ไฟล์ที่ Tool จะเขียน (เพราะ Tool ทำงานใน repoPath อยู่แล้ว เลยใช้แค่ชื่อไฟล์)
+	// ไฟล์ที่ Tool จะเขียน
 	cmd := exec.Command("semgrep", "scan", "--config=auto", "--json", "--output=semgrep.json", ".")
 	cmd.Dir = repoPath 
 	err := cmd.Run()
@@ -163,7 +163,7 @@ func runTrivy(repoPath string, scanID string) ([]models.Finding, error) {
 	// ไฟล์ที่ Go จะอ่าน
 	outFileForGo := filepath.Join(repoPath, "trivy.json")
 
-	// สั่งรัน Trivy ให้ออกไฟล์ชื่อ trivy.json (เพราะมันรันในโฟลเดอร์อยู่แล้ว)
+	// สั่งรัน Trivy ให้ออกไฟล์ชื่อ trivy.json
 	cmd := exec.Command("trivy", "fs", ".", "--format", "json", "--output", "trivy.json", "--skip-db-update", "--scanners", "vuln", "--timeout", "15m")
 	cmd.Dir = repoPath
 	if err := cmd.Run(); err != nil {
@@ -226,7 +226,7 @@ func runGitleaks(repoPath string, scanID string) ([]models.Finding, error) {
 func runCheckov(repoPath string, scanID string) ([]models.Finding, error) {
 	var findings []models.Finding
 	
-	// อันนี้สร้างด้วย Go เลยต้องใช้ Path เต็ม
+	// สร้างด้วย Go
 	outFile := filepath.Join(repoPath, "checkov.json")
 
 	cmd := exec.Command("checkov", "-d", ".", "--output", "json", "--output-file-path", ".")

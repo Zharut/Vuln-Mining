@@ -87,7 +87,7 @@ func runScanner(reader *bufio.Reader) {
 		return
 	}
 
-	fmt.Printf("✅ Found %d NEW repositories ready to scan!\n", len(projects))
+	fmt.Printf("Found %d NEW repositories ready to scan!\n", len(projects))
 
 	var targetsToScan []models.Project
 
@@ -125,12 +125,12 @@ func runScanner(reader *bufio.Reader) {
 			// คืนโควต้าเมื่อเสร็จงาน
 			defer func() { <-sem }()
 
-			fmt.Printf("\n   ⏳ [%d/%d] Starting Scan: %s/%s\n", index+1, len(targetsToScan), p.Owner, p.RepoName)
+			fmt.Printf("\n   [%d/%d] Starting Scan: %s/%s\n", index+1, len(targetsToScan), p.Owner, p.RepoName)
 
 			// เริ่มสแกน
 			services.ProcessRepositoryHistory(p)
 
-			fmt.Printf("\n   ✅ Finished Scan: %s/%s\n", p.Owner, p.RepoName)
+			fmt.Printf("\n   Finished Scan: %s/%s\n", p.Owner, p.RepoName)
 		}(project, i)
 	}
 
