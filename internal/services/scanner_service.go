@@ -164,7 +164,7 @@ func runTrivy(repoPath string, scanID string) ([]models.Finding, error) {
 	outFileForGo := filepath.Join(repoPath, "trivy.json")
 
 	// สั่งรัน Trivy ให้ออกไฟล์ชื่อ trivy.json (เพราะมันรันในโฟลเดอร์อยู่แล้ว)
-	cmd := exec.Command("trivy", "fs", ".", "--format", "json", "--output", "trivy.json", "--skip-db-update")
+	cmd := exec.Command("trivy", "fs", ".", "--format", "json", "--output", "trivy.json", "--skip-db-update", "--scanners", "vuln", "--timeout", "15m")
 	cmd.Dir = repoPath
 	if err := cmd.Run(); err != nil {
 		return nil, err

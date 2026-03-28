@@ -3,3 +3,4 @@ node_modules/
 go.mod
 go.sum
 scanned_repos/
+*.exe
