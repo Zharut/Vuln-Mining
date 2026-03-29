@@ -6,3 +6,4 @@ scanned_repos/
 *.exe
 resl/
 vuln_mining_db.sql
+frontend/dist/

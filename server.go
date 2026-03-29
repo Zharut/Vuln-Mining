@@ -50,11 +50,14 @@ func StartServer() {
 
 	r.GET("/api/options/languages", func(c *gin.Context) {
 		var rawLangs []string
-		
-		database.DB.Model(&models.Project{}).
-			Distinct("language").
-			Order("language ASC").
-			Pluck("language", &rawLangs)
+
+		database.DB.Table("projects").
+			Select("DISTINCT projects.language").
+			Joins("JOIN commits ON commits.project_id = projects.project_id").
+			Joins("JOIN scans ON scans.commit_id = commits.commit_id").
+			Joins("JOIN findings ON findings.scan_id = scans.scan_id"). // กรองเฉพาะที่มี finding
+			Order("projects.language ASC").
+			Pluck("projects.language", &rawLangs)
 
 		// ค่าว่างให้กลายเป็นคำว่า "Misc"
 		var finalLangs []string
@@ -199,6 +202,7 @@ func StartServer() {
 	r.GET("/api/report/vulnerabilities", func(c *gin.Context) {
 		lang := c.Query("lang")
 		mode := c.Query("mode")
+		minStars := c.DefaultQuery("min_stars", "0")
 
 		type RankResult struct {
 			Name  string `json:"name"`
@@ -215,7 +219,7 @@ func StartServer() {
 						JOIN scans s ON f.scan_id = s.scan_id
 						JOIN commits c ON s.commit_id = c.commit_id
 						JOIN projects p ON c.project_id = p.project_id
-						WHERE p.language = '' OR p.language IS NULL
+						WHERE (p.language = '' OR p.language IS NULL) AND p.stars >= ?
 						GROUP BY p.project_id, f.vulnerability_id
 					),
 					CurrentFindings AS (
@@ -224,7 +228,7 @@ func StartServer() {
 						JOIN scans s ON f.scan_id = s.scan_id
 						JOIN commits c ON s.commit_id = c.commit_id
 						JOIN projects p ON c.project_id = p.project_id
-						WHERE (p.language = '' OR p.language IS NULL)
+						WHERE (p.language = '' OR p.language IS NULL) AND p.stars >= ?
 						  AND c.committed_at = (SELECT MAX(committed_at) FROM commits WHERE project_id = p.project_id)
 					)
 					SELECT a.vulnerability_id as name, COUNT(*) as count
@@ -235,7 +239,7 @@ func StartServer() {
 					GROUP BY a.vulnerability_id
 					ORDER BY count DESC;
 				`
-				database.DB.Raw(sql).Scan(&results)
+				database.DB.Raw(sql, minStars, minStars).Scan(&results)
 			} else {
 				sql := `
 					WITH LatestCommits AS (
@@ -249,7 +253,7 @@ func StartServer() {
 						JOIN scans s ON f.scan_id = s.scan_id
 						JOIN commits c ON s.commit_id = c.commit_id
 						JOIN projects p ON c.project_id = p.project_id
-						WHERE p.language = ?
+						WHERE p.language = ? AND p.stars >= ?
 					),
 					CurrentFindings AS (
 						SELECT DISTINCT p.project_id, f.vulnerability_id
@@ -258,7 +262,7 @@ func StartServer() {
 						JOIN commits c ON s.commit_id = c.commit_id
 						JOIN LatestCommits lc ON c.project_id = lc.project_id AND c.committed_at = lc.latest_commit
 						JOIN projects p ON c.project_id = p.project_id
-						WHERE p.language = ?
+						WHERE p.language = ? AND p.stars >= ?
 					)
 					SELECT a.vulnerability_id as name, COUNT(*) as count
 					FROM AllFindings a
@@ -268,25 +272,41 @@ func StartServer() {
 					GROUP BY a.vulnerability_id
 					ORDER BY count DESC;
 				`
-				database.DB.Raw(sql, lang, lang).Scan(&results)
+				database.DB.Raw(sql, lang, minStars, lang, minStars).Scan(&results)
 			}
 
 		} else {
-			query := database.DB.Table("findings").
-				Select("findings.vulnerability_id as name, COUNT(*) as count").
-				Joins("JOIN scans ON findings.scan_id = scans.scan_id").
-				Joins("JOIN commits ON scans.commit_id = commits.commit_id").
-				Joins("JOIN projects ON commits.project_id = projects.project_id")
+			// Use raw SQL for frequent mode to ensure stars filter is applied
+			var sql string
+			var args []interface{}
 
 			if lang == "Misc" {
-				query = query.Where("projects.language = ? OR projects.language IS NULL", "")
-			} else if lang != "" && lang != "All" {
-				query = query.Where("projects.language = ?", lang)
+				sql = `
+					SELECT findings.vulnerability_id as name, COUNT(*) as count
+					FROM findings
+					JOIN scans ON findings.scan_id = scans.scan_id
+					JOIN commits ON scans.commit_id = commits.commit_id
+					JOIN projects ON commits.project_id = projects.project_id
+					WHERE (projects.language = '' OR projects.language IS NULL) AND projects.stars >= ?
+					GROUP BY findings.vulnerability_id
+					ORDER BY count DESC
+				`
+				args = append(args, minStars)
+			} else {
+				sql = `
+					SELECT findings.vulnerability_id as name, COUNT(*) as count
+					FROM findings
+					JOIN scans ON findings.scan_id = scans.scan_id
+					JOIN commits ON scans.commit_id = commits.commit_id
+					JOIN projects ON commits.project_id = projects.project_id
+					WHERE projects.language = ? AND projects.stars >= ?
+					GROUP BY findings.vulnerability_id
+					ORDER BY count DESC
+				`
+				args = append(args, lang, minStars)
 			}
 
-			query.Group("findings.vulnerability_id").
-				Order("count DESC").
-				Scan(&results)
+			database.DB.Raw(sql, args...).Scan(&results)
 		}
 
 		c.JSON(200, results)
@@ -295,6 +315,7 @@ func StartServer() {
 	// MTTR Analytics
 	r.GET("/api/report/mttr", func(c *gin.Context) {
 		lang := c.Query("lang")
+		minStars := c.DefaultQuery("min_stars", "0")
 		if lang == "" {
 			lang = "Misc"
 		}
@@ -327,7 +348,7 @@ func StartServer() {
 					JOIN scans s ON f.scan_id = s.scan_id
 					JOIN commits c ON s.commit_id = c.commit_id
 					JOIN projects p ON c.project_id = p.project_id
-					WHERE (p.language = '' OR p.language IS NULL)
+					WHERE (p.language = '' OR p.language IS NULL) AND p.stars >= ?
 					GROUP BY p.language, f.vulnerability_id, p.project_id
 				),
 				FixedVulns AS (
@@ -348,6 +369,7 @@ func StartServer() {
 				ORDER BY avg_days_to_fix DESC
 				LIMIT 50;
 			`
+			args = append(args, minStars)
 		} else {
 			sql = `
 				WITH ProjectLatestCommit AS (
@@ -366,7 +388,7 @@ func StartServer() {
 					JOIN scans s ON f.scan_id = s.scan_id
 					JOIN commits c ON s.commit_id = c.commit_id
 					JOIN projects p ON c.project_id = p.project_id
-					WHERE p.language = ?
+					WHERE p.language = ? AND p.stars >= ?
 					GROUP BY p.language, f.vulnerability_id, p.project_id
 				),
 				FixedVulns AS (
@@ -387,7 +409,7 @@ func StartServer() {
 				ORDER BY avg_days_to_fix DESC
 				LIMIT 50;
 			`
-			args = append(args, lang)
+			args = append(args, lang, minStars)
 		}
 
 		database.DB.Raw(sql, args...).Scan(&results)
@@ -438,7 +460,7 @@ func StartServer() {
 	// failsafe ดึงจาก sql
 	r.GET("/api/knowledge/:id", func(c *gin.Context) {
 		id := c.Param("id")
-		
+
 		type VulnDetail struct {
 			VulnerabilityID string  `json:"vulnerability_id"`
 			Title           string  `json:"title"`

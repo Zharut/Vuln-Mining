@@ -9,6 +9,7 @@ function DeepAnalytics() {
     const [languages, setLanguages] = useState([])
     const [selectedLang, setSelectedLang] = useState('')
     const [reportMode, setReportMode] = useState('frequent')
+    const [minStars, setMinStars] = useState('0')
     const [data, setData] = useState([])
     const [loading, setLoading] = useState(false)
     const [sortOrder, setSortOrder] = useState('desc')
@@ -39,11 +40,10 @@ function DeepAnalytics() {
         if (!selectedLang) return
         setLoading(true)
 
-        let url = `http://localhost:8081/api/report/vulnerabilities?lang=${selectedLang}&mode=${reportMode}`
+        let url = `http://localhost:8081/api/report/vulnerabilities?lang=${selectedLang}&mode=${reportMode}&min_stars=${minStars}`
 
-        // 🔥 แก้ไขแล้ว: เพิ่มพารามิเตอร์ ?lang= ให้กับ API โหมด MTTR
         if (reportMode === 'mttr') {
-            url = `http://localhost:8081/api/report/mttr?lang=${selectedLang}`
+            url = `http://localhost:8081/api/report/mttr?lang=${selectedLang}&min_stars=${minStars}`
         }
 
         axios.get(url, { timeout: 30000 }) // 30 second timeout
@@ -68,7 +68,7 @@ function DeepAnalytics() {
                 setData([]) // Clear data on error to prevent showing stale data
                 setLoading(false)
             })
-    }, [selectedLang, reportMode])
+    }, [selectedLang, reportMode, minStars])
 
     //Sorting/Layout
     const sortedData = [...data].sort((a, b) => {
@@ -224,6 +224,22 @@ function DeepAnalytics() {
                         >
                             {languages.map(l => <option key={l} value={l}>{l}</option>)}
                         </select>
+                    </div>
+                </div>
+
+                {/* Min Stars Filter */}
+                <div className="w-full xl:w-1/4">
+                    <label className="block text-xs text-gray-400 mb-2 font-bold uppercase tracking-wider">Min Star Rating</label>
+                    <div className="relative">
+                        <input
+                            type="number"
+                            min="0"
+                            step="1"
+                            className="w-full bg-gray-950 border border-gray-700 text-white pl-4 pr-4 py-3 rounded-xl outline-none font-bold focus:ring-2 focus:ring-blue-500"
+                            value={minStars}
+                            onChange={e => setMinStars(e.target.value)}
+                            placeholder="0"
+                        />
                     </div>
                 </div>
 
