@@ -30,6 +30,24 @@ func StartServer() {
 		c.JSON(200, gin.H{"total_projects": projectCount, "total_vulns": vulnCount})
 	})
 
+	r.GET("/api/stats/baselines", func(c *gin.Context) {
+		minStars := c.DefaultQuery("min_stars", "0")
+		type Baseline struct {
+			Name  string `json:"name" gorm:"column:name"`
+			Total int    `json:"total" gorm:"column:total"`
+		}
+		var results []Baseline
+
+		// จัดกลุ่มภาษาและนับจำนวน Project โดยคำนึงถึง min_stars
+		database.DB.Table("projects").
+			Select("COALESCE(NULLIF(language, ''), 'Misc') as name, COUNT(DISTINCT project_id) as total").
+			Where("stars >= ?", minStars).
+			Group("COALESCE(NULLIF(language, ''), 'Misc')").
+			Scan(&results)
+
+		c.JSON(200, results)
+	})
+
 	r.GET("/api/options/languages", func(c *gin.Context) {
 		var rawLangs []string
 		
@@ -86,8 +104,9 @@ func StartServer() {
 		severities := c.QueryArray("severity")
 
 		type StatResult struct {
-			Name  string `json:"name"`
-			Value int    `json:"value"`
+			Name          string `json:"name" gorm:"column:name"`
+			Value         int    `json:"value" gorm:"column:value"`
+			AffectedRepos int    `json:"affected_repos" gorm:"column:affected_repos"`
 		}
 		var results []StatResult
 
@@ -104,14 +123,14 @@ func StartServer() {
 		dbField := "findings.vulnerability_id"
 		switch groupBy {
 		case "language":
-			dbField = "projects.language"
+			dbField = "COALESCE(NULLIF(projects.language, ''), 'Misc')"
 		case "tool":
 			dbField = "findings.tool"
 		case "severity":
 			dbField = "findings.severity"
 		}
 
-		query.Select(dbField + " as name, COUNT(*) as value").
+		query.Select(dbField + " as name, COUNT(*) as value, COUNT(DISTINCT projects.project_id) as affected_repos").
 			Group(dbField).
 			Order("value DESC").
 			Scan(&results)

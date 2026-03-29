@@ -10,8 +10,11 @@ function Dashboard() {
     const [selectedSeverities, setSelectedSeverities] = useState(['CRITICAL', 'HIGH', 'MEDIUM'])
     const [minStars, setMinStars] = useState(0)
 
-    // เพิ่ม State สำหรับปุ่มสลับ Count / Percent
+    // State สำหรับปุ่มสลับ Count / Percent
     const [showPercent, setShowPercent] = useState(false)
+
+    // เก็บค่าจำนวนโปรเจกต์ตั้งต้น (Baseline)
+    const [baselines, setBaselines] = useState({})
 
     const COLORS = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899'];
 
@@ -26,8 +29,20 @@ function Dashboard() {
             params.append('min_stars', minStars)
             selectedSeverities.forEach(s => params.append('severity', s))
 
-            const res = await axios.get(`http://localhost:8081/api/analytics?${params.toString()}`)
-            setData(res.data || [])
+            // ยิง 2 API พร้อมกัน (ดึงข้อมูลช่องโหว่ + ดึงจำนวนโปรเจกต์ตั้งต้น)
+            const [resAnalytics, resBaselines] = await Promise.all([
+                axios.get(`http://localhost:8081/api/analytics?${params.toString()}`),
+                axios.get(`http://localhost:8081/api/stats/baselines?min_stars=${minStars}`)
+            ])
+
+            setData(resAnalytics.data || [])
+
+            // เอาจำนวนโปรเจกต์มาแปลงเป็น Object ให้ค้นหาง่ายๆ
+            const baseMap = {}
+            if (resBaselines.data) {
+                resBaselines.data.forEach(b => baseMap[b.name] = b.total)
+            }
+            setBaselines(baseMap)
         } catch (err) { console.error(err) }
     }
 
@@ -37,14 +52,31 @@ function Dashboard() {
         )
     }
 
-    // คำนวณผลรวมทั้งหมดเพื่อเอาไปทำ %
+    // คำนวณผลรวมของช่องโหว่ทั้งหมด (เอาไว้โชว์ตัวเลขเฉยๆ)
     const totalCount = data.reduce((sum, item) => sum + (item.value || 0), 0)
 
-    // เตรียมข้อมูลกราฟ
-    const chartData = data.map(item => ({
-        ...item,
-        percentage: totalCount > 0 ? Number(((item.value / totalCount) * 100).toFixed(2)) : 0
-    }))
+    // คำนวณหา "จำนวนโปรเจกต์ทั้งหมดในระบบ" ตาม filter ดาวปัจจุบัน
+    const totalSystemRepos = Object.values(baselines).reduce((sum, val) => sum + val, 0);
+
+    // เตรียมข้อมูลกราฟแบบ % ของโปรเจกต์ที่ได้รับผลกระทบ (Affected Repos)
+    const chartData = data.map(item => {
+        let percentage = 0;
+
+        // 🔥 ป้องกันอาการ NaN ด้วยการดักว่าถ้าค่าเป็น undefined ให้ถือเป็น 0 ไปก่อน
+        const affected = item.affected_repos || 0;
+
+        if (groupBy === 'language') {
+            // โหมดภาษา: (จำนวนโปรเจกต์ที่มีช่องโหว่ ÷ จำนวนโปรเจกต์ทั้งหมดของภาษานั้น) * 100
+            const langTotal = baselines[item.name] || 1;
+            percentage = Number(((affected / langTotal) * 100).toFixed(2));
+        } else {
+            // โหมดอื่นๆ: (จำนวนโปรเจกต์ที่มีช่องโหว่นี้ ÷ จำนวนโปรเจกต์ทั้งหมดในระบบ) * 100
+            const sysTotal = totalSystemRepos || 1;
+            percentage = Number(((affected / sysTotal) * 100).toFixed(2));
+        }
+
+        return { ...item, percentage }
+    })
 
     return (
         <div className="p-8 max-w-7xl mx-auto min-h-screen bg-gray-950 text-gray-100">
@@ -119,7 +151,7 @@ function Dashboard() {
                         <h3 className="text-white font-bold flex items-center gap-2">
                             Visual Distribution
                         </h3>
-                        {/* 🔥 ปุ่มสลับโหมดกราฟ */}
+                        {/* ปุ่มสลับโหมดกราฟ */}
                         <div className="flex bg-gray-950 p-1 rounded-lg border border-gray-800">
                             <button
                                 onClick={() => setShowPercent(false)}
@@ -143,11 +175,13 @@ function Dashboard() {
                                 <XAxis dataKey="name" stroke="#9CA3AF" tick={{ fontSize: 12 }} />
                                 <YAxis stroke="#9CA3AF" />
                                 <Tooltip
-                                    // 🔥 เปลี่ยน Tooltip ตามโหมดที่เลือก
-                                    formatter={(value) => showPercent ? [`${value}%`, 'Percentage'] : [value.toLocaleString(), 'Count']}
+                                    formatter={(value) => showPercent
+                                        ? [`${value}%`, 'Affected Repos (%)']
+                                        : [value.toLocaleString(), 'Total Findings']
+                                    }
                                     contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', color: '#fff' }}
                                 />
-                                {/* 🔥 เลือก dataKey ว่าจะเรนเดอร์แท่งตาม value หรือ percentage */}
+                                {/* เลือก dataKey ว่าจะเรนเดอร์แท่งตาม value หรือ percentage */}
                                 <Bar dataKey={showPercent ? "percentage" : "value"} fill="#3B82F6" radius={[4, 4, 0, 0]}>
                                     {chartData.map((entry, index) => (
                                         <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
@@ -163,7 +197,7 @@ function Dashboard() {
                     <h3 className="text-white font-bold mb-4 flex items-center justify-between">
                         <span>Detailed Counts</span>
                         <span className="text-xs font-mono text-gray-500 bg-gray-950 px-2 py-1 rounded">
-                            Total: {totalCount.toLocaleString()}
+                            Total Vulns: {totalCount.toLocaleString()}
                         </span>
                     </h3>
                     <div className="overflow-y-auto flex-1 pr-2 max-h-[400px] custom-scrollbar">
@@ -181,8 +215,12 @@ function Dashboard() {
                                             {item.name || 'Unknown'}
                                         </td>
                                         <td className="p-3 text-right">
-                                            <div className="font-bold text-white">{item.value.toLocaleString()}</div>
-                                            <div className="text-xs text-blue-400 font-mono">{item.percentage}%</div>
+                                            <div className="font-bold text-white" title="Total Vulnerabilities Found">
+                                                {item.value.toLocaleString()}
+                                            </div>
+                                            <div className="text-xs text-blue-400 font-mono" title="% of Repositories Affected">
+                                                {item.percentage}% Affected
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
