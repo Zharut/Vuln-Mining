@@ -277,9 +277,9 @@ func StartServer() {
 		}
 
 		type MTTRResult struct {
-			Language     string  `json:"language"`
-			VulnID       string  `json:"vulnerability_id"`
-			AvgDaysToFix float64 `json:"avg_days_to_fix"`
+			Language        string  `json:"language" gorm:"column:language"`
+			VulnerabilityID string  `json:"vulnerability_id" gorm:"column:vulnerability_id"`
+			AvgDaysToFix    float64 `json:"avg_days_to_fix" gorm:"column:avg_days_to_fix"`
 		}
 		var results []MTTRResult
 

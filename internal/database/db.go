@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"vuln-scanner/internal/models" // <--- อย่าลืม import models
+	//"vuln-scanner/internal/models"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -35,7 +35,7 @@ if err != nil {
 
 	log.Println("✅ Database Connected Successfully via GORM!")
 
-	log.Println("🔄 Running Auto Migrations...")
+	/*log.Println("🔄 Running Auto Migrations...")
 	err = DB.AutoMigrate(
 		&models.Project{},             // 1. Projects
 		&models.Commit{},              // 2. Commits
@@ -48,5 +48,5 @@ if err != nil {
 		log.Fatal("❌ Migration Failed:", err)
 	}
 	
-	log.Println("✅ Migration Completed!")
+	log.Println("✅ Migration Completed!")*/
 }
