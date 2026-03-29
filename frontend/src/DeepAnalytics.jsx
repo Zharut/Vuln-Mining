@@ -46,7 +46,7 @@ function DeepAnalytics() {
             url = `http://localhost:8081/api/report/mttr?lang=${selectedLang}`
         }
 
-        axios.get(url)
+        axios.get(url, { timeout: 30000 }) // 30 second timeout
             .then(res => {
                 let resultData = res.data || []
 
@@ -64,7 +64,8 @@ function DeepAnalytics() {
                 setLoading(false)
             })
             .catch(err => {
-                console.error(err)
+                console.error(`Error fetching ${reportMode} data:`, err)
+                setData([]) // Clear data on error to prevent showing stale data
                 setLoading(false)
             })
     }, [selectedLang, reportMode])

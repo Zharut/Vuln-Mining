@@ -81,7 +81,7 @@ function Dashboard() {
                 <div className="bg-gray-900 p-5 rounded-xl border border-gray-800">
                     <h3 className="text-red-400 font-bold mb-3 flex items-center gap-2">Severity Filter</h3>
                     <div className="grid grid-cols-2 gap-2">
-                        {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN'].map(sev => (
+                        {['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'UNKNOWN', 'FAILED'].map(sev => (
                             <label key={sev} className="flex items-center gap-2 cursor-pointer hover:bg-gray-800 p-1 rounded">
                                 <input
                                     type="checkbox"

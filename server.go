@@ -219,29 +219,33 @@ func StartServer() {
 				database.DB.Raw(sql).Scan(&results)
 			} else {
 				sql := `
-					WITH AllFindings AS (
-						SELECT p.project_id, f.vulnerability_id
+					WITH LatestCommits AS (
+						SELECT project_id, MAX(committed_at) as latest_commit
+						FROM commits
+						GROUP BY project_id
+					),
+					AllFindings AS (
+						SELECT DISTINCT p.project_id, f.vulnerability_id
 						FROM findings f
 						JOIN scans s ON f.scan_id = s.scan_id
 						JOIN commits c ON s.commit_id = c.commit_id
 						JOIN projects p ON c.project_id = p.project_id
 						WHERE p.language = ?
-						GROUP BY p.project_id, f.vulnerability_id
 					),
 					CurrentFindings AS (
-						SELECT p.project_id, f.vulnerability_id
+						SELECT DISTINCT p.project_id, f.vulnerability_id
 						FROM findings f
 						JOIN scans s ON f.scan_id = s.scan_id
 						JOIN commits c ON s.commit_id = c.commit_id
+						JOIN LatestCommits lc ON c.project_id = lc.project_id AND c.committed_at = lc.latest_commit
 						JOIN projects p ON c.project_id = p.project_id
 						WHERE p.language = ?
-						  AND c.committed_at = (SELECT MAX(committed_at) FROM commits WHERE project_id = p.project_id)
 					)
 					SELECT a.vulnerability_id as name, COUNT(*) as count
 					FROM AllFindings a
-					LEFT JOIN CurrentFindings cur 
+					LEFT JOIN CurrentFindings cur
 						ON a.project_id = cur.project_id AND a.vulnerability_id = cur.vulnerability_id
-					WHERE cur.project_id IS NULL 
+					WHERE cur.project_id IS NULL
 					GROUP BY a.vulnerability_id
 					ORDER BY count DESC;
 				`
